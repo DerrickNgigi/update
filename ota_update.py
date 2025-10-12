@@ -4,6 +4,7 @@ import uos
 import gc
 from utime import sleep
 from meter_gsm import gsmInitialization
+import globals
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
