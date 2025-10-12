@@ -43,6 +43,8 @@ def print_sleep_duration(timer_value):
 
 def monitor_loop():
     # Initialize watchdog (30 minutes = 1800 seconds)
+    gc.collect()
+    print("Free mem:", gc.mem_free())
 
     while True:
         print("\n🕒 Running periodic meter monitoring...")

@@ -33,6 +33,16 @@ def file_exists(path):
     except OSError:
         return False
 
+def ensure_temp_dir():
+    """Ensure /flash/temp exists for storing temporary OTA files."""
+    temp_dir = "/flash/temp"
+    try:
+        uos.mkdir(temp_dir)
+        log("Created temp folder: " + temp_dir)
+    except OSError:
+        pass  # already exists
+    return temp_dir
+
 def get_local_version():
     try:
         with open(VERSION_FILE, "r") as f:
@@ -79,29 +89,18 @@ def download_file(fname, retries=3):
     Downloads file from UPDATE_URL + fname using curl, writes to flash in chunks.
     Ensures file integrity by checking size consistency.
     """
+    temp_dir = ensure_temp_dir()
     url = UPDATE_URL + "/" + fname
-    tmp_path = "/flash/tmp_" + fname
+    tmp_path = temp_dir + "/tmp_" + fname
     dest_path = "/flash/" + fname
 
     for attempt in range(1, retries + 1):
         try:
             log("Downloading [{}] (Attempt {}/{})".format(fname, attempt, retries))
 
-            # Open destination temp file
-            with open(tmp_path, "wb") as f:
-                # Stream mode: fetch in 1 KB chunks to prevent truncation
-                def write_chunk(data):
-                    try:
-                        f.write(data)
-                        return 0
-                    except Exception as e:
-                        log("Write error: {}".format(e))
-                        return 1
+            # Use LoBo-style curl.get() with file output
+            res_code, hdr, body = curl.get(url, tmp_path)
 
-                # Run curl in streaming mode (LoBo style)
-                res_code, hdr, total_len = curl.getfile(url, write_chunk)
-
-            # After download completes
             if res_code == 0 and "200" in hdr:
                 size_on_disk = uos.stat(tmp_path)[6]
                 log("✅ Download complete: {} bytes".format(size_on_disk))
@@ -124,6 +123,7 @@ def download_file(fname, retries=3):
     return False
 
 
+
 def download_and_replace_files(file_list):
     total = len(file_list)
     for i, fname in enumerate(file_list):
@@ -133,6 +133,72 @@ def download_and_replace_files(file_list):
             log("⚠️ Skipped file due to repeated failures: {}".format(fname))
         gc.collect()
         sleep(1)
+        
+def update_global_file(device_id, retries=3):
+    """
+    Safely updates /flash/global.py for this specific device.
+    Compares embedded GLOBAL_VERSION before replacing.
+    """
+    temp_dir = ensure_temp_dir()
+    global_py = "global.py"
+    tmp_path = temp_dir + "/tmp_" + global_py
+    dest_path = "/flash/" + global_py
+    url_py = "{}/device_configs/{}_global.py".format(UPDATE_URL, device_id)
+
+    def extract_version(file_path):
+        """Read version string from a Python file."""
+        try:
+            with open(file_path, "r") as f:
+                for line in f:
+                    if "GLOBAL_VERSION" in line:
+                        return line.split("=")[1].strip().replace('"', '').replace("'", "")
+        except:
+            return "0.0.0"
+        return "0.0.0"
+
+    try:
+        # ---- Get local version ----
+        local_version = extract_version(dest_path)
+        log("📘 Local global.py version: {}".format(local_version))
+
+        # ---- Download remote global.py ----
+        for attempt in range(1, retries + 1):
+            try:
+                log("Downloading global.py for [{}] (Attempt {}/{})".format(device_id, attempt, retries))
+                res_code, hdr, body = curl.get(url_py, tmp_path)
+                if res_code == 0 and "200" in hdr:
+                    size_on_disk = uos.stat(tmp_path)[6]
+                    log("✅ Download complete: {} bytes".format(size_on_disk))
+
+                    # ---- Extract remote version ----
+                    remote_version = extract_version(tmp_path)
+                    log("🔍 Remote version: {}".format(remote_version))
+
+                    # ---- Compare ----
+                    if remote_version == local_version:
+                        log("✅ global.py already up to date (v{})".format(local_version))
+                        uos.remove(tmp_path)
+                        return False
+
+                    # ---- Replace and log ----
+                    if file_exists(dest_path):
+                        uos.remove(dest_path)
+                    uos.rename(tmp_path, dest_path)
+                    log("✅ global.py updated to version {}".format(remote_version))
+                    return True
+                else:
+                    log("❌ Download failed (code {}, hdr: {})".format(res_code, hdr))
+            except Exception as e:
+                log("⚠️ Error downloading global.py: {}".format(e))
+            sleep(3)
+
+        log("⚠️ Skipping global.py after multiple failures")
+        return False
+
+    except Exception as e:
+        log("⚠️ Error in update_global_file: {}".format(e))
+        return False
+
 
 
 def run_ota():
@@ -163,3 +229,4 @@ def run_ota():
 # ====== Main Entry Point ======
 if __name__ == "__main__":
     run_ota()
+
