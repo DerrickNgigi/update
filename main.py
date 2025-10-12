@@ -5,43 +5,54 @@ from meter import (
     open_valve, close_valve, monitor_target, read_meter_parameters, valve_test, read_meter_parameters_upload
 )
 from meter_storage import *
-from lobo_wifi import wifiInitialize
+from ota_update import *
 from machine import UART
 from utime import sleep, time
 import _thread
 import globals
 import machine
 import json
-from machine import WDT, reset
 import gc
-
 
 # ============ UART CONFIGURATION ============ #
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
 
 # ============ MODBUS Slave Addresses ============ #
-SLAVE_ADDRESSES = [12, 13, 14, 15]
+SLAVE_ADDRESSES = globals.SLAVE_ADDRESSES
 
 # ============ MQTT CONFIGURATION ============ #
-MQTT_PUB_TOPIC = 'smartmeter/FQX_SM_10006/pub/controlcomm/message'
+MQTT_PUB_TOPIC = globals.MQTT_PUB_TOPIC
+MQTT_SUB_TOPICS = globals.MQTT_SUB_TOPICS
 
-MQTT_SUB_TOPICS = [
-    "smartmeter/FQX_SM_10006-12/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10006-13/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10006-14/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10006-15/sub/controlcomm/message"
-]
-
+# ============ Device CONFIGURATION ============ #
 
 # ============ MONITOR THREAD ============ #
+
+def print_sleep_duration(timer_value):
+    # Convert seconds to minutes and seconds
+    minutes = timer_value // 60
+    seconds = timer_value % 60
+
+    if minutes > 0:
+        duration_text = "%d minute%s" % (minutes, "s" if minutes > 1 else "")
+        if seconds:
+            duration_text += " and %d second%s" % (seconds, "s" if seconds > 1 else "")
+    else:
+        duration_text = "%d second%s" % (seconds, "s" if seconds > 1 else "")
+
+    print("✅ Monitoring complete. Sleeping for %s.\n" % duration_text)
+
 def monitor_loop():
     # Initialize watchdog (30 minutes = 1800 seconds)
+    gc.collect()
+    print("Free mem:", gc.mem_free())
 
     while True:
         print("\n🕒 Running periodic meter monitoring...")
 
         # Garbage collect to free up memory
         gc.collect()
+        print("Free mem:", gc.mem_free())
 
         # Check GSM status before continuing
         if gsmCheckStatus() != 1:
@@ -68,10 +79,10 @@ def monitor_loop():
         except Exception as e:
             print("⚠ Error during monitor_target:", e)
 
-        print("✅ Monitoring complete. Sleeping for 30 minutes.\n")
+        print_sleep_duration(globals.timer)
 
         # Sleep for 30 minutes
-        for _ in range(1800):  # 30 minutes = 1800 seconds
+        for _ in range(globals.timer):  # 30 minutes = 1800 seconds
             sleep(1)
 
 
@@ -89,11 +100,15 @@ def main():
     # Initial meter parameter read
     print("📊 Reading initial meter parameters...")
     read_meter_parameters(uart, SLAVE_ADDRESSES)
-    sleep(1)
+    sleep(1)    
     
     # Initial target monitoring
     print("📊 Monitering Units...")
     monitor_target(uart, SLAVE_ADDRESSES)
+    
+    # Garbage collect to free up memory
+    gc.collect()
+    print("Free mem:", gc.mem_free())
 
     # Initialize GSM Module
     print("📡 Initializing GSM module...")
@@ -105,6 +120,22 @@ def main():
         print("📶 Waiting for GSM connection...")
         sleep(1)
     print("✅ GSM connected.")
+    
+    gc.collect()
+    print("Free mem:", gc.mem_free())
+    
+    # Check on global variable updates
+    update_global_file(globals.MQTT_CLIENT_ID, retries=3)
+    
+    # Check on files updates
+    run_ota()
+    gc.collect()
+    print("Free mem:", gc.mem_free())
+    
+    sleep(3)
+    
+    
+    
 
     # Start MQTT listener thread
     print("🔌 Starting MQTT listener thread...")
@@ -121,5 +152,7 @@ def main():
 # ============ ENTRY POINT ============ #
 if __name__ == "__main__":
     main()
+
+
 
 
