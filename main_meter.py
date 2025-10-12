@@ -13,7 +13,7 @@ import machine
 import json
 import gc
 
-
+# ============ 1.0.1 ============ #
 # ============ UART CONFIGURATION ============ #
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
 
