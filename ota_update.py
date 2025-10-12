@@ -143,7 +143,7 @@ def update_global_file(device_id, retries=3):
     temp_dir = ensure_temp_dir()
     fname = "globals.py"
     tmp_path = temp_dir + "/tmp_" + fname
-    dest_path = "/flash/" + fname
+    dest_path = "/flash/temp" + fname
     url = "{}/device_configs/{}_globals.py".format(UPDATE_URL, device_id)
 
     if gsmCheckStatus() != 1:
@@ -240,3 +240,4 @@ def run_ota():
         machine.reset()
     else:
         log("No updates to apply.")
+
