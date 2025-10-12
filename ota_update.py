@@ -2,13 +2,13 @@ import curl
 import machine
 import uos
 import gc
-from utime import sleep
-from meter_gsm import gsmInitialization
 import globals
+from utime import sleep
+from meter_gsm import gsmInitialization, gsmCheckStatus
 
 # ====== Configuration ======
-UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
-VERSION_FILE = "/flash/version.txt"
+UPDATE_URL = globals.UPDATE_URL
+VERSION_FILE = globals.VERSION_FILE
 
 FILES_TO_UPDATE = [
     "boot.py",
@@ -137,82 +137,96 @@ def download_and_replace_files(file_list):
         
 def update_global_file(device_id, retries=3):
     """
-    Safely updates /flash/global.py for this specific device.
-    Compares embedded GLOBAL_VERSION before replacing.
+    Safely update global.py only for the correct device.
+    Checks version number before replacing.
     """
     temp_dir = ensure_temp_dir()
-    global_py = "global.py"
-    tmp_path = temp_dir + "/tmp_" + global_py
-    dest_path = "/flash/" + global_py
-    url_py = "{}/device_configs/{}_global.py".format(UPDATE_URL, device_id)
+    fname = "globals.py"
+    tmp_path = temp_dir + "/tmp_" + fname
+    dest_path = "/flash/" + fname
+    url = "{}/device_configs/{}_globals.py".format(UPDATE_URL, device_id)
 
-    def extract_version(file_path):
-        """Read version string from a Python file."""
+    if gsmCheckStatus() != 1:
+        gsmInitialization()
+
+    def get_version(file_path):
+        """Extract GLOBAL_VERSION from a Python file if it exists."""
         try:
             with open(file_path, "r") as f:
                 for line in f:
-                    if "GLOBAL_VERSION" in line:
-                        return line.split("=")[1].strip().replace('"', '').replace("'", "")
-        except:
-            return "0.0.0"
+                    if "GLOBAL_VERSION" in line and "=" in line:
+                        return line.split("=")[1].strip().replace('"', "").replace("'", "")
+        except Exception:
+            pass
         return "0.0.0"
 
-    try:
-        # ---- Get local version ----
-        local_version = extract_version(dest_path)
-        log("📘 Local global.py version: {}".format(local_version))
+    current_version = get_version(dest_path)
+    log("📦 Current global.py version: {}".format(current_version))
 
-        # ---- Download remote global.py ----
-        for attempt in range(1, retries + 1):
-            try:
-                log("Downloading global.py for [{}] (Attempt {}/{})".format(device_id, attempt, retries))
-                res_code, hdr, body = curl.get(url_py, tmp_path)
-                if res_code == 0 and "200" in hdr:
+    for attempt in range(1, retries + 1):
+        try:
+            log("⬇️ Downloading device-specific [{}] (Attempt {}/{})".format(fname, attempt, retries))
+            res_code, hdr, body = curl.get(url, tmp_path)
+
+            if res_code == 0 and "200" in hdr:
+                new_version = get_version(tmp_path)
+                log("🆕 Downloaded version: {}".format(new_version))
+
+                # Compare versions
+                if is_newer_version(new_version, current_version):
                     size_on_disk = uos.stat(tmp_path)[6]
-                    log("✅ Download complete: {} bytes".format(size_on_disk))
+                    log("✅ Valid update detected ({} → {}), {} bytes".format(current_version, new_version, size_on_disk))
 
-                    # ---- Extract remote version ----
-                    remote_version = extract_version(tmp_path)
-                    log("🔍 Remote version: {}".format(remote_version))
-
-                    # ---- Compare ----
-                    if remote_version == local_version:
-                        log("✅ global.py already up to date (v{})".format(local_version))
-                        uos.remove(tmp_path)
-                        return False
-
-                    # ---- Replace and log ----
                     if file_exists(dest_path):
                         uos.remove(dest_path)
                     uos.rename(tmp_path, dest_path)
-                    log("✅ global.py updated to version {}".format(remote_version))
+                    log("✅ Updated {} for {}".format(fname, device_id))
+                    machine.reset()
                     return True
                 else:
-                    log("❌ Download failed (code {}, hdr: {})".format(res_code, hdr))
-            except Exception as e:
-                log("⚠️ Error downloading global.py: {}".format(e))
-            sleep(3)
+                    log("⚠️ Skipping update — downloaded version ({}) is not newer than current ({}).".format(new_version, current_version))
+                    uos.remove(tmp_path)
+                    return False
+            else:
+                log("❌ Download failed (curl code {}, hdr: {})".format(res_code, hdr))
 
-        log("⚠️ Skipping global.py after multiple failures")
+        except Exception as e:
+            log("⚠️ Error downloading {}: {}".format(fname, e))
+        sleep(3)
+
+    log("⚠️ Skipping {} after multiple failures".format(fname))
+    return False
+
+
+def is_newer_version(new, current):
+    """Simple semantic version comparison."""
+    try:
+        new_parts = [int(x) for x in new.split(".")]
+        cur_parts = [int(x) for x in current.split(".")]
+        for i in range(max(len(new_parts), len(cur_parts))):
+            n = new_parts[i] if i < len(new_parts) else 0
+            c = cur_parts[i] if i < len(cur_parts) else 0
+            if n > c:
+                return True
+            elif n < c:
+                return False
         return False
-
-    except Exception as e:
-        log("⚠️ Error in update_global_file: {}".format(e))
-        return False
-
-
+    except Exception:
+        # if parsing fails, assume update is newer
+        return True
 
 def run_ota():
     gc.collect()
     print("Free mem:", gc.mem_free())
 
     print("📡 Initializing GSM module...")
-    sleep(4)
-    gsmInitialization()
+    
+    if gsmCheckStatus() != 1:
+        gsmInitialization()
 
     gc.collect()
     print("Free mem:", gc.mem_free())
-    sleep(5)
+    sleep(3)
 
     log("Checking for OTA updates...")
     new_version = check_for_update()
@@ -226,8 +240,3 @@ def run_ota():
         machine.reset()
     else:
         log("No updates to apply.")
-
-# ====== Main Entry Point ======
-if __name__ == "__main__":
-    run_ota()
-

@@ -5,6 +5,7 @@ from meter import (
     open_valve, close_valve, monitor_target, read_meter_parameters, valve_test, read_meter_parameters_upload
 )
 from meter_storage import *
+from ota_update import *
 from machine import UART
 from utime import sleep, time
 import _thread
@@ -13,7 +14,6 @@ import machine
 import json
 import gc
 
-# ============ 1.0.1 ============ #
 # ============ UART CONFIGURATION ============ #
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
 
@@ -24,6 +24,7 @@ SLAVE_ADDRESSES = globals.SLAVE_ADDRESSES
 MQTT_PUB_TOPIC = globals.MQTT_PUB_TOPIC
 MQTT_SUB_TOPICS = globals.MQTT_SUB_TOPICS
 
+# ============ Device CONFIGURATION ============ #
 
 # ============ MONITOR THREAD ============ #
 
@@ -99,7 +100,7 @@ def main():
     # Initial meter parameter read
     print("📊 Reading initial meter parameters...")
     read_meter_parameters(uart, SLAVE_ADDRESSES)
-    sleep(1)
+    sleep(1)    
     
     # Initial target monitoring
     print("📊 Monitering Units...")
@@ -122,6 +123,21 @@ def main():
     
     gc.collect()
     print("Free mem:", gc.mem_free())
+    
+    # Check on global variable updates
+    update_global_file(globals.MQTT_CLIENT_ID, retries=3)
+    gc.collect()
+    print("Free mem:", gc.mem_free())    
+    
+    # Check on files updates
+    run_ota()
+    gc.collect()
+    print("Free mem:", gc.mem_free())
+    
+    sleep(3)
+    
+    
+    
 
     # Start MQTT listener thread
     print("🔌 Starting MQTT listener thread...")
