@@ -31,6 +31,6 @@ MQTT_SUB_TOPICS = [
     "smartmeter/FQX_SM_10007-15/sub/controlcomm/message"
 ]
 
-timer = 1800
+timer = 180
 
 
