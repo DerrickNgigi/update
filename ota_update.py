@@ -36,7 +36,7 @@ def file_exists(path):
 
 def ensure_temp_dir():
     """Ensure /flash/temp exists for storing temporary OTA files."""
-    temp_dir = "/flash/temp"
+    temp_dir = "/flash/temp/"
     try:
         uos.mkdir(temp_dir)
         log("Created temp folder: " + temp_dir)
@@ -137,15 +137,17 @@ def download_and_replace_files(file_list):
         
 def update_global_file(device_id, retries=3):
     """
-    Safely update global.py only for the correct device.
+    Safely update globals.py only for the correct device.
     Checks version number before replacing.
+    Updates globals.GLOBAL_VERSION in memory if updated.
     """
     temp_dir = ensure_temp_dir()
     fname = "globals.py"
     tmp_path = temp_dir + "/tmp_" + fname
-    dest_path = "/flash/temp" + fname
+    dest_path = "/flash/" + fname
     url = "{}/device_configs/{}_globals.py".format(UPDATE_URL, device_id)
 
+    # Ensure GSM connection
     if gsmCheckStatus() != 1:
         gsmInitialization()
 
@@ -156,9 +158,25 @@ def update_global_file(device_id, retries=3):
                 for line in f:
                     if "GLOBAL_VERSION" in line and "=" in line:
                         return line.split("=")[1].strip().replace('"', "").replace("'", "")
-        except Exception:
-            pass
+        except Exception as e:
+            log("⚠️ Error reading version from {}: {}".format(file_path, e))
         return "0.0.0"
+
+    def file_exists(path):
+        try:
+            uos.stat(path)
+            return True
+        except OSError:
+            return False
+
+    def is_newer_version(new, old):
+        """Compare two semantic versions like '1.2.3'."""
+        try:
+            n = [int(x) for x in new.split(".")]
+            o = [int(x) for x in old.split(".")]
+            return n > o
+        except:
+            return False
 
     current_version = get_version(dest_path)
     log("📦 Current global.py version: {}".format(current_version))
@@ -172,20 +190,35 @@ def update_global_file(device_id, retries=3):
                 new_version = get_version(tmp_path)
                 log("🆕 Downloaded version: {}".format(new_version))
 
-                # Compare versions
                 if is_newer_version(new_version, current_version):
-                    size_on_disk = uos.stat(tmp_path)[6]
+                    try:
+                        size_on_disk = uos.stat(tmp_path)[6]
+                    except Exception:
+                        size_on_disk = 0
                     log("✅ Valid update detected ({} → {}), {} bytes".format(current_version, new_version, size_on_disk))
 
+                    # Replace old file with new version
                     if file_exists(dest_path):
                         uos.remove(dest_path)
                     uos.rename(tmp_path, dest_path)
-                    log("✅ Updated {} for {}".format(fname, device_id))
-                    machine.reset()
+
+                    # Update in-memory version
+                    try:
+                        import globals
+                        globals.GLOBAL_VERSION = new_version
+                        log("🧠 Updated in-memory GLOBAL_VERSION to {}".format(new_version))
+                    except Exception as e:
+                        log("⚠️ Could not update in-memory version: {}".format(e))
+
+                    log("✅ globals.py updated successfully for {}".format(device_id))
+
+                    # Optional: reboot to ensure all globals reload cleanly
+                    # machine.reset()
                     return True
                 else:
                     log("⚠️ Skipping update — downloaded version ({}) is not newer than current ({}).".format(new_version, current_version))
-                    uos.remove(tmp_path)
+                    if file_exists(tmp_path):
+                        uos.remove(tmp_path)
                     return False
             else:
                 log("❌ Download failed (curl code {}, hdr: {})".format(res_code, hdr))
@@ -198,22 +231,22 @@ def update_global_file(device_id, retries=3):
     return False
 
 
-def is_newer_version(new, current):
-    """Simple semantic version comparison."""
-    try:
-        new_parts = [int(x) for x in new.split(".")]
-        cur_parts = [int(x) for x in current.split(".")]
-        for i in range(max(len(new_parts), len(cur_parts))):
-            n = new_parts[i] if i < len(new_parts) else 0
-            c = cur_parts[i] if i < len(cur_parts) else 0
-            if n > c:
-                return True
-            elif n < c:
-                return False
-        return False
-    except Exception:
-        # if parsing fails, assume update is newer
-        return True
+# def is_newer_version(new, current):
+#     """Simple semantic version comparison."""
+#     try:
+#         new_parts = [int(x) for x in new.split(".")]
+#         cur_parts = [int(x) for x in current.split(".")]
+#         for i in range(max(len(new_parts), len(cur_parts))):
+#             n = new_parts[i] if i < len(new_parts) else 0
+#             c = cur_parts[i] if i < len(cur_parts) else 0
+#             if n > c:
+#                 return True
+#             elif n < c:
+#                 return False
+#         return False
+#     except Exception:
+#         # if parsing fails, assume update is newer
+#         return True
 
 def run_ota():
     gc.collect()
@@ -240,4 +273,3 @@ def run_ota():
         machine.reset()
     else:
         log("No updates to apply.")
-

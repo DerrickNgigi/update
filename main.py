@@ -126,6 +126,8 @@ def main():
     
     # Check on global variable updates
     update_global_file(globals.MQTT_CLIENT_ID, retries=3)
+    gc.collect()
+    print("Free mem:", gc.mem_free())    
     
     # Check on files updates
     run_ota()
@@ -133,9 +135,6 @@ def main():
     print("Free mem:", gc.mem_free())
     
     sleep(3)
-    
-    
-    
 
     # Start MQTT listener thread
     print("🔌 Starting MQTT listener thread...")
@@ -148,6 +147,9 @@ def main():
     _thread.start_new_thread("MeterMonitor", monitor_loop, ())
 
     print("✅ System initialization complete. Now running...")
+    
+    gc.collect()
+    print("Free mem:", gc.mem_free())
 
 # ============ ENTRY POINT ============ #
 if __name__ == "__main__":

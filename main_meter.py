@@ -24,12 +24,22 @@ SLAVE_ADDRESSES = globals.SLAVE_ADDRESSES
 MQTT_PUB_TOPIC = globals.MQTT_PUB_TOPIC
 MQTT_SUB_TOPICS = globals.MQTT_SUB_TOPICS
 
-# ============ Device CONFIGURATION ============ #
+
+# ============ MEMORY HELPERS ============ #
+def safe_gc(tag=""):
+    """Force garbage collection and check memory threshold."""
+    gc.collect()
+    free = gc.mem_free()
+    print("🧠 GC run after %s | Free mem: %d" % (tag, free))
+    if free < 10240:  # Less than ~10 KB
+        print("🚨 Memory critically low (%d). Rebooting..." % free)
+        sleep(3)
+        machine.reset()
+
 
 # ============ MONITOR THREAD ============ #
-
 def print_sleep_duration(timer_value):
-    # Convert seconds to minutes and seconds
+    """Human-readable sleep time logging."""
     minutes = timer_value // 60
     seconds = timer_value % 60
 
@@ -42,118 +52,129 @@ def print_sleep_duration(timer_value):
 
     print("✅ Monitoring complete. Sleeping for %s.\n" % duration_text)
 
+
 def monitor_loop():
-    # Initialize watchdog (30 minutes = 1800 seconds)
-    gc.collect()
-    print("Free mem:", gc.mem_free())
+    """Periodic monitoring of meter data with aggressive GC."""
+    safe_gc("monitor_loop_start")
 
     while True:
-        print("\n🕒 Running periodic meter monitoring...")
-
-        # Garbage collect to free up memory
-        gc.collect()
-        print("Free mem:", gc.mem_free())
-
-        # Check GSM status before continuing
-        if gsmCheckStatus() != 1:
-            print("⚠ GSM not connected. Restarting system...")
-            sleep(3)
-            machine.reset()
-        else:
-            print("📶 GSM connected.")
-
-        # Read meter data and publish
-        meter_data = read_meter_parameters_upload(uart, SLAVE_ADDRESSES)
-        if meter_data:
-            try:
-                mqttPublish(mqtt, MQTT_PUB_TOPIC, json.dumps(meter_data))
-                print("📤 Meter data published successfully.")
-            except Exception as e:
-                print("❌ MQTT publish failed:", e)
-        else:
-            print("⚠ No data received from meters.")
-
-        # Monitor target (non-returning side effect)
         try:
-            monitor_target(uart, SLAVE_ADDRESSES)
+            print("\n🕒 Running periodic meter monitoring...")
+            safe_gc("loop_start")
+
+            # GSM Check
+            if gsmCheckStatus() != 1:
+                print("⚠ GSM not connected. Restarting system...")
+                sleep(3)
+                machine.reset()
+            else:
+                print("📶 GSM connected.")
+
+            # Read and publish meter data
+            meter_data = None
+            try:
+                meter_data = read_meter_parameters_upload(uart, SLAVE_ADDRESSES)
+                safe_gc("read_meter_parameters_upload")
+            except Exception as e:
+                print("⚠ Error reading meter data:", e)
+                safe_gc("read_meter_exception")
+
+            if meter_data:
+                try:
+                    mqttPublish(mqtt, MQTT_PUB_TOPIC, json.dumps(meter_data))
+                    print("📤 Meter data published successfully.")
+                except Exception as e:
+                    print("❌ MQTT publish failed:", e)
+                safe_gc("mqtt_publish")
+            else:
+                print("⚠ No data received from meters.")
+
+            # Monitor target
+            try:
+                monitor_target(uart, SLAVE_ADDRESSES)
+            except Exception as e:
+                print("⚠ Error during monitor_target:", e)
+            safe_gc("monitor_target")
+
+            # Log sleep
+            print_sleep_duration(globals.timer)
+
+            # Sleep with periodic GC
+            for i in range(globals.timer):  # 30 minutes = 1800 seconds
+                if i % 30 == 0:
+                    safe_gc("sleep_cycle_%d" % i)
+                sleep(1)
+
         except Exception as e:
-            print("⚠ Error during monitor_target:", e)
-
-        print_sleep_duration(globals.timer)
-
-        # Sleep for 30 minutes
-        for _ in range(globals.timer):  # 30 minutes = 1800 seconds
-            sleep(1)
+            print("💥 Monitor loop error:", e)
+            safe_gc("monitor_loop_exception")
+            sleep(5)
+            machine.reset()
 
 
 # ============ MAIN EXECUTION ============ #
 def main():
     print("🚀 Machine booting...")
-    
-    sleep(8)
+    sleep(5)
+    safe_gc("boot_start")
 
-    # Initial Valve Test
-    print("🔧 Testing valves...")
-    valve_test(uart, SLAVE_ADDRESSES)
-    sleep(1)
-    
-    # Initial meter parameter read
-    print("📊 Reading initial meter parameters...")
-    read_meter_parameters(uart, SLAVE_ADDRESSES)
-    sleep(1)    
-    
-    # Initial target monitoring
-    print("📊 Monitering Units...")
-    monitor_target(uart, SLAVE_ADDRESSES)
-    
-    # Garbage collect to free up memory
-    gc.collect()
-    print("Free mem:", gc.mem_free())
-
-    # Initialize GSM Module
-    print("📡 Initializing GSM module...")
-    sleep(4)
-    gsmInitialization()
-
-    # Wait for GSM signal before continuing
-    while gsmCheckStatus() != 1:
-        print("📶 Waiting for GSM connection...")
+    try:
+        # Valve Test
+        print("🔧 Testing valves...")
+        valve_test(uart, SLAVE_ADDRESSES)
+        safe_gc("valve_test")
         sleep(1)
-    print("✅ GSM connected.")
-    
-    gc.collect()
-    print("Free mem:", gc.mem_free())
-    
-    # Check on global variable updates
-    update_global_file(globals.MQTT_CLIENT_ID, retries=3)
-    gc.collect()
-    print("Free mem:", gc.mem_free())    
-    
-    # Check on files updates
-    run_ota()
-    gc.collect()
-    print("Free mem:", gc.mem_free())
-    
-    sleep(3)
-    
-    
-    
 
-    # Start MQTT listener thread
-    print("🔌 Starting MQTT listener thread...")
-    _thread.start_new_thread("MqttListener", mqttInitialize, (mqtt, MQTT_SUB_TOPICS,))
+        # Initial parameter read
+        print("📊 Reading initial meter parameters...")
+        read_meter_parameters(uart, SLAVE_ADDRESSES)
+        safe_gc("read_meter_parameters")
+        sleep(1)
 
-    sleep(10)
-    
-    # Start periodic monitoring thread
-    print("🧵 Starting periodic meter monitor thread...")
-    _thread.start_new_thread("MeterMonitor", monitor_loop, ())
+        # Initial monitoring
+        print("📊 Monitoring Units...")
+        monitor_target(uart, SLAVE_ADDRESSES)
+        safe_gc("monitor_target_init")
 
-    print("✅ System initialization complete. Now running...")
+        # Initialize GSM
+        print("📡 Initializing GSM module...")
+        sleep(4)
+        gsmInitialization()
+        safe_gc("gsm_init")
+
+        while gsmCheckStatus() != 1:
+            print("📶 Waiting for GSM connection...")
+            sleep(1)
+        print("✅ GSM connected.")
+        safe_gc("gsm_connected")
+
+        # Global file OTA
+        update_global_file(globals.MQTT_CLIENT_ID, retries=3)
+        safe_gc("update_global_file")
+
+        # Firmware OTA
+        run_ota()
+        safe_gc("run_ota")
+
+        # Start MQTT listener
+        print("🔌 Starting MQTT listener thread...")
+        _thread.start_new_thread("MqttListener", mqttInitialize, (mqtt, MQTT_SUB_TOPICS,))
+
+        sleep(10)
+
+        # Start periodic monitoring thread
+        print("🧵 Starting periodic meter monitor thread...")
+        _thread.start_new_thread("MeterMonitor", monitor_loop, ())
+
+        print("✅ System initialization complete. Now running...")
+
+    except Exception as e:
+        print("💥 Fatal error in main():", e)
+        safe_gc("main_exception")
+        sleep(5)
+        machine.reset()
+
 
 # ============ ENTRY POINT ============ #
 if __name__ == "__main__":
     main()
-
-
-
