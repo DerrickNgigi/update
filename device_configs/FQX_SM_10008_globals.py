@@ -1,7 +1,7 @@
 from machine import UART
 
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.1"
+GLOBAL_VERSION = "1.0.2"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
