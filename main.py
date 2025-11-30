@@ -73,12 +73,28 @@ def check_scheduled_restart():
         sleep(1)
         machine.reset()
 
-# ============ MONITOR THREAD ============ #
+def smart_sleep(seconds):
+    """
+    Sleeps for 'seconds' while keeping the Watchdog alive.
+    Feeds the dog every 10 seconds.
+    """
+    # Loop in 10-second chunks
+    for _ in range(seconds // 10):
+        if wdt: wdt.feed()
+        sleep(10)
+    
+    # Sleep remaining seconds (if any)
+    remaining = seconds % 10
+    if remaining > 0:
+        sleep(remaining)
+        
+    if wdt: wdt.feed() # Feed one last time on wake up
+
+# ============ MONITOR THREAD (SIMPLIFIED) ============ #
 def monitor_loop():
     global wdt
     
     # 1. SETUP WATCHDOG - 300 Seconds (5 Minutes)
-    # This is the maximum hardware limit. We cannot set it to 30 mins.
     try:
         wdt = WDT(timeout=300000) 
         sys_log("Watchdog Enabled (300s limit)", "INFO")
@@ -86,73 +102,61 @@ def monitor_loop():
         sys_log("Could not start WDT", "ERROR")
 
     safe_gc()
-    mqtt_fail_count = 0
-    MAX_MQTT_RETRIES = 10
     
-    boot_grace_period = 60 
-    start_time = time()
+    # --- RESTORED VARIABLES ---
+    mqtt_fail_count = 0
+    MAX_MQTT_RETRIES = 10  # Set to 10 as requested
 
     while True:
         try:
-            # Feed WDT at start of active cycle
+            # --- START OF CYCLE ---
             if wdt: wdt.feed()
-
             safe_gc()
             
-            # --- ACTIVE TASKS (Takes ~10-30 seconds) ---
+            # 1. Midnight Check
             check_scheduled_restart()
 
+            # 2. GSM Check
             if gsmCheckStatus() != 1:
                 sys_log("GSM disconnected in Loop. Resetting.", "ERROR")
                 sleep(3)
                 machine.reset()
 
-            mqtt_connected = False
-            is_booting = (time() - start_time) < boot_grace_period
-
-            if mqtt is None:
-                pass 
-            else:
-                try:
+            # 3. MQTT Health Check
+            can_upload = False
+            try:
+                if mqtt:
                     mqtt.ping()
-                    mqtt_connected = True
-                    mqtt_fail_count = 0 
-                except:
-                    if not is_booting:
-                        mqtt_fail_count += 1
-                        print("MQTT Ping Failed {}/{}".format(mqtt_fail_count, MAX_MQTT_RETRIES))
-                        if mqtt_fail_count >= MAX_MQTT_RETRIES:
-                            sys_log("MQTT Dead. Resetting.", "ERROR")
-                            sleep(2)
-                            machine.reset()
-            
-            if mqtt_connected:
+                    can_upload = True
+                    mqtt_fail_count = 0 # Success, reset counter
+                else:
+                    raise Exception("No MQTT Object")
+            except:
+                mqtt_fail_count += 1
+                print("MQTT Ping Failed ({}/{})".format(mqtt_fail_count, MAX_MQTT_RETRIES))
+                
+                # Check against MAX_MQTT_RETRIES (10)
+                if mqtt_fail_count >= MAX_MQTT_RETRIES:
+                    sys_log("MQTT Dead. Rebooting.", "ERROR")
+                    sleep(2)
+                    machine.reset()
+
+            # 4. UPLOAD (Only if check passed)
+            if can_upload:
                 try:
                     read_meter_parameters_upload(uart, SLAVE_ADDRESSES, mqttPublish, mqtt, MQTT_PUB_TOPIC)
                 except Exception as e:
                     sys_log("Read/Upload Fail: {}".format(e), "ERROR")
             
+            # 5. Local Monitor
             try:
                 monitor_target(uart, SLAVE_ADDRESSES)
             except Exception:
                 pass 
 
-            # --- LONG SLEEP (e.g., 30 Minutes) ---
-            # We must prevent the 5-minute watchdog from killing us,
-            # but we will only touch it occasionally.
-            
-            # This feed happens right before sleep starts
-            if wdt: wdt.feed() 
-            
-            for i in range(globals.timer):
-                # We calculate when to feed. 
-                # 120 seconds = 2 minutes.
-                # If we are sleeping for 30 minutes, we will only feed ~15 times total.
-                # This minimizes interference significantly.
-                if i > 0 and i % 120 == 0:
-                     if wdt: wdt.feed()
-                
-                sleep(1)
+            # 6. SLEEP
+            # Use smart_sleep to handle the timer and watchdog automatically
+            smart_sleep(globals.timer)
 
         except Exception as e:
             sys_log("Loop Crash: {}".format(e), "ERROR")
@@ -169,10 +173,9 @@ def main():
     safe_gc()
 
     try:
-        valve_test(uart, SLAVE_ADDRESSES)
         read_meter_parameters(uart, SLAVE_ADDRESSES)
-        monitor_target(uart, SLAVE_ADDRESSES)
 
+        # Initialize GSM (BLOCKING WAIT)
         sys_log("Initializing GSM...", "INFO")
         gsmInitialization()
         
@@ -187,6 +190,7 @@ def main():
         
         sys_log("GSM Connected.", "INFO")
 
+        # OTA Updates
         gc.collect()
         try:
             update_global_file(globals.MQTT_CLIENT_ID, retries=3)
@@ -196,6 +200,7 @@ def main():
         except Exception as e:
             sys_log("OTA Fail: {}".format(e), "ERROR")
 
+        # Start Threads
         _thread.start_new_thread("MqttListener", mqttInitialize, (mqtt, MQTT_SUB_TOPICS,))
         
         sleep(5) 
@@ -203,6 +208,7 @@ def main():
 
         sys_log("System Running", "INFO")
         
+        # Keep Main Alive
         while True:
             sleep(10)
 
