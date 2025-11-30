@@ -6,7 +6,7 @@ from meter_storage import *
 # ==========================================
 # CONFIGURATION
 # ==========================================
-SIMULATION_MODE = True   # Set to False when meters are connected
+SIMULATION_MODE = False   # Set to False when meters are connected
 
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
 

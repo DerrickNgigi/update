@@ -4,12 +4,6 @@ import time
 # ========== UART CONFIG ==========
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
 
-# MODBUS Slave Addresses
-SLAVE_ADDRESS_1 = 13  # Meter1 MODBUS Slave address
-SLAVE_ADDRESS_2 = 14  # Meter2 MODBUS Slave address
-SLAVE_ADDRESS_3 = 15
-SLAVE_ADDRESS_4 = 12
-
 # ========== CRC + Frame Utilities ==========
 def calculate_crc(data):
     crc = 0xFFFF
@@ -124,32 +118,34 @@ def print_value(label, value, unit, fmt="%.2f"):
 # ========== MAIN LOOP ==========
 
 def main():
+    slave_addresses = [1, 2, 3, 4, 5, 6]   # Add/remove meters easily
+
     while True:
         print("---- Reading from water meters ----")
 
-        cumulative1 = read_cumulative_flow(uart, SLAVE_ADDRESS_1)
-        cumulative2 = read_cumulative_flow(uart, SLAVE_ADDRESS_2)
-        cumulative3 = read_cumulative_flow(uart, SLAVE_ADDRESS_3)
-        cumulative4 = read_cumulative_flow(uart, SLAVE_ADDRESS_4)
-            
-        
-        # Print values
-        print_value("Cumulative Flow 1", cumulative1, "L", "%.1f")
-        print_value("Cumulative Flow 2", cumulative2, "L", "%.1f")
-        
-        print_value("Cumulative Flow 3", cumulative3, "L", "%.1f")
-        print_value("Cumulative Flow 4", cumulative4, "L", "%.1f")
-        
-#         open_valve(uart, SLAVE_ADDRESS_1)
-#         time.sleep(5)
+        cumulative_values = {}
+
+        # ---- READ ALL METERS ----
+        for addr in slave_addresses:
+            value = read_cumulative_flow(uart, addr)
+            cumulative_values[addr] = value
+            print_value("Cumulative Flow %d" % addr, value, "L", "%.1f")
+
+        # ---- OPEN ALL VALVES ----
+        print("Opening all valves...")
+        for addr in slave_addresses:
+            open_valve(uart, addr)
+        time.sleep(5)
 # 
-#         close_valve(uart, SLAVE_ADDRESS_1)
+#         # ---- CLOSE ALL VALVES ----
+#         print("Closing all valves...")
+#         for addr in slave_addresses:
+#             close_valve(uart, addr)
 #         time.sleep(5)
-        
-        
 
         print("---- Done ----\n")
         time.sleep(2)
+
 
 # Run main loop
 main()

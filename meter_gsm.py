@@ -57,7 +57,7 @@ def gsmInitialization():
 
 
     gsm.start(tx=MODEM_TX, rx=MODEM_RX, apn=GSM_APN,
-              user=GSM_USER, password=GSM_PASS)
+              user=GSM_USER, password=GSM_PASS, roaming=True)
     
     for retry in range(20):
         if gsm.atcmd('AT'):
@@ -86,4 +86,3 @@ def gsmInitialization():
 def gsmCheckStatus():
     gsmconnectivity = gsm.status()[0]
     return gsmconnectivity
-

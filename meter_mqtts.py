@@ -6,6 +6,7 @@ MAX_RETRIES = 5
 from meter import *
 from machine import UART
 import machine
+import _thread # <-- IMPORT _thread
 
 # Global Variables
 MQTT_BROKER_HOST = globals.MQTT_BROKER_HOST
@@ -15,6 +16,8 @@ MQTT_CLIENT_PASSWORD = globals.MQTT_CLIENT_PASSWORD
 MQTT_CLIENT_ID = globals.MQTT_CLIENT_ID
 MQTT_PUB_TOPIC = globals.MQTT_PUB_TOPIC
 
+# ============ REMOVED LOCK OBJECT ============ #
+# uart_lock = None # <-- REMOVED
 
 # UART CONFIGURATION
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)  # UART2 on ESP32
@@ -39,6 +42,7 @@ def conncb(task):
 
 def disconncb(task):
     print("[{}] Disconnected".format(task))
+    # Call with 2 arguments
     mqttInitialize(mqtt, MQTT_SUB_TOPICS)
 
 def subscb(task):
@@ -50,10 +54,15 @@ def pubcb(pub):
 def datacb(msg):
     print("[{}] Data arrived from topic: {}, Message:\n{}".format(msg[0], msg[1], msg[2]))
     global uart
+    # No lock object needed
 
     utime.sleep(1)
 
     try:
+        # --- ACQUIRE GLOBAL LOCK ---
+        _thread.lock() # <-- NEW METHOD
+        # print("UART lock acquired (MQTT)")
+
         payload = json.loads(msg[2])
         message = payload.get('message')
         litres = payload.get('litres')
@@ -70,6 +79,7 @@ def datacb(msg):
         if message == "success":
             if litres is None or litres == 0:
                 print("Ignoring message due to empty or zero litres.")
+                _thread.unlock() # <-- MUST UNLOCK before returning
                 return
             retries = 0
             while retries < 5:
@@ -125,8 +135,11 @@ def datacb(msg):
 
     except Exception as e:
         print("Error while parsing data: {}".format(e))
-
-
+        
+    finally:
+        # --- RELEASE GLOBAL LOCK ---
+        _thread.unlock() # <-- NEW METHOD
+        # print("UART lock released (MQTT)")
         
 
 
@@ -149,7 +162,10 @@ mqtt = network.mqtt(
 )
 
 # Initialize and subscribe to multiple topics
+# --- MODIFIED FUNCTION SIGNATURE (back to 2 args) ---
 def mqttInitialize(mqtt, topic_list):
+    # No lock parameter needed
+    
     loopCount = 10
 
     def mqttConnect():
@@ -167,11 +183,10 @@ def mqttInitialize(mqtt, topic_list):
         if loopCount == 0:
             print("MQTT Connection Failed")
             machine.reset()
-            return None  # Return None if connection fails
+            return None
     else:
         print("MQTT Connected")
 
-        # Subscribe to each topic individually
         for topic in topic_list:
             if isinstance(topic, str):
                 if mqtt.subscribe(topic):
@@ -188,13 +203,11 @@ def mqttInitialize(mqtt, topic_list):
 
 def mqttPublish(mqtt, topic, message):
     mqtt.publish(topic, message)
-    print("MQTT Published to Topic:", topic, "Message:", message)
+    # print("MQTT Published to Topic:", topic, "Message:", message)
     return True
 
 def mqttCheckStatus(mqtt):
     status = mqtt.status()[0]
     if status != 2:
         print("MQTT not connected")
-    else:
-        print("MQTT connected")
     return status
