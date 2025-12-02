@@ -1,7 +1,7 @@
 from machine import UART
 
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.3"
+GLOBAL_VERSION = "1.0.4"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
@@ -37,4 +37,8 @@ MQTT_SUB_TOPICS = [
     "smartmeter/FQX_SM_10007-10/sub/controlcomm/message"
 ]
 
-timer = 1800
+timer = 180
+
+# ============ COMMAND QUEUE (THREAD SAFE) ============ #
+# MQTT thread puts commands here. Main thread executes them.
+CMD_QUEUE = []

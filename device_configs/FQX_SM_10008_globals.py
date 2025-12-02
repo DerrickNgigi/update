@@ -1,7 +1,7 @@
 from machine import UART
 
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.2"
+GLOBAL_VERSION = "1.0.4"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
@@ -38,3 +38,7 @@ MQTT_SUB_TOPICS = [
 ]
 
 timer = 180
+
+# ============ COMMAND QUEUE (THREAD SAFE) ============ #
+# MQTT thread puts commands here. Main thread executes them.
+CMD_QUEUE = []
