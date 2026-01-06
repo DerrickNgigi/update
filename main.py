@@ -64,6 +64,35 @@ def check_scheduled_restart():
             pass
         sleep(60) # Avoid repeating in same minute
 
+# ============ Establish Init Connectio ============ #
+def check_for_initConnection():
+    """
+    Runs on boot. 
+    1. Checks if a target file exists.
+    2. If MISSING: Reads meter and initializes file (Syncs Target = Current).
+    
+    """
+    print("[Init] Checking device state...")
+    for addr in SLAVE_ADDRESSES:
+        try:
+            saved_target = load_target_reading(addr)
+            
+            # --- AUTO-INITIALIZATION --- #
+            if saved_target is None:
+                print("[Init] No saved state for Addr {}. Reading meter...".format(addr))
+                current_vol = get_valid_volume(uart, addr)
+                
+                if current_vol is not None:
+                    # Initialize: Set Target = Current (No debt)
+                    save_target_reading(addr, current_vol)
+                    print("[Init] Device initialized. Volume: {} L".format(current_vol))
+                else:
+                    print("[Init] ❌ Failed to read meter at Addr {}. Cannot init.".format(addr))
+                continue
+                
+        except Exception as e:
+            print("[Recovery] Error on Addr {}: {}".format(addr, e))
+
 # ============ COMMAND PROCESSOR (THREAD SAFE) ============ #
 def process_command_queue():
     """
@@ -217,6 +246,9 @@ def main():
         
         sys_log("GSM Connected.", "INFO")
         led.value(0)
+        
+        sys_log("Check Init Store File.", "INFO")
+        check_for_initConnection()
 
         # 1. Start MQTT Listener (Receives -> Queue)
         _thread.start_new_thread("MqttListener", meter_mqtts.mqttInitialize, (meter_mqtts.mqtt, MQTT_SUB_TOPICS,))
