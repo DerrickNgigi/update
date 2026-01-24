@@ -242,9 +242,8 @@ def main():
         wait = 0
         while gsmCheckStatus() != 1:
             print("Waiting for GSM...")
-            led.value(not led.value()) 
-            # We must feed WDT manually here if enabled early, 
-            # but supervisor isn't running yet, so we are safe.
+            led.value(not led.value())
+            
             sleep(1)
             wait += 1
             if wait > 120: 
