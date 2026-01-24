@@ -2,7 +2,7 @@ from meter_gsm import gsmInitialization, gsmCheckStatus
 import meter_mqtts 
 from meter import (
     read_meter_parameters_upload, monitor_target, 
-    valve_test, 
+    valve_test, get_valid_volume,
     open_valve, close_valve, 
     save_target_reading, load_target_reading,
     uart
@@ -63,6 +63,13 @@ def check_scheduled_restart():
         except:
             pass
         sleep(60) # Avoid repeating in same minute
+        
+def check_for_update_on_start():
+    try:
+        update_global_file(globals.MQTT_CLIENT_ID, retries=3)
+        run_ota()
+    except:
+        pass
 
 # ============ Establish Init Connectio ============ #
 def check_for_initConnection():
@@ -246,6 +253,8 @@ def main():
         
         sys_log("GSM Connected.", "INFO")
         led.value(0)
+        
+        check_for_update_on_start()
         
         sys_log("Check Init Store File.", "INFO")
         check_for_initConnection()

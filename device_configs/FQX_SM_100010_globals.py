@@ -23,7 +23,7 @@ GSM_USER = ''
 GSM_PASS = ''
 
 MQTT_SUB_TOPICS = [
-    "smartmeter/FQX_SM_10009-40/sub/controlcomm/message"
+    "smartmeter/FQX_SM_10009-28/sub/controlcomm/message"
 ]
 
 timer = 180
