@@ -18,7 +18,8 @@ FILES_TO_UPDATE = [
     "meter_mqtts.py",
     "meter_run.py",
     "meter_storage.py",
-    "meter_tests.py"
+    "ota_update.py"
+    
 ]
 
 # ====== Utility Functions ======

@@ -28,7 +28,7 @@ def conncb(task):
 
 def disconncb(task):
     print("[{}] Disconnected".format(task))
-    mqttInitialize(mqtt, MQTT_SUB_TOPICS)
+    machine.reset()
 
 def subscb(task):
     print("[{}] Subscribed".format(task))
