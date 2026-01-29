@@ -1,5 +1,5 @@
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.6"
+GLOBAL_VERSION = "1.0.11"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
@@ -23,7 +23,7 @@ GSM_USER = ''
 GSM_PASS = ''
 
 MQTT_SUB_TOPICS = [
-    "smartmeter/FQX_SM_10009-28/sub/controlcomm/message"
+    "smartmeter/FQX_SM_100010-40/sub/controlcomm/message"
 ]
 
 timer = 180
