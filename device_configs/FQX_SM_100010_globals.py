@@ -1,12 +1,12 @@
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.11"
+GLOBAL_VERSION = "1.0.12"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
 VERSION_FILE = "/flash/version.txt"
 
 # ============ MODBUS SLAVE ADDRESSES ============ #
-SLAVE_ADDRESSES = [40]
+SLAVE_ADDRESSES = [16]
 
 # ============ MQTT CONFIGURATION ============ #
 MQTT_BROKER_HOST = "152.42.139.67"

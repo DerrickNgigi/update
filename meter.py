@@ -175,8 +175,28 @@ def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqt
 
 def valve_test(uart, addresses):
     for address in addresses:
-        open_valve(uart, address)
-    time.sleep(2)
-    for address in addresses:
         close_valve(uart, address)
     time.sleep(2)
+    for address in addresses:
+        open_valve(uart, address)
+    time.sleep(2)
+    
+def read_meter_parameters(uart, addresses):
+    """
+    Standard monitoring function (kept for reference or standalone use).
+    """
+    for address in addresses:
+        current_volume = get_valid_volume(uart, address)
+        time.sleep(0.2)
+        target_volume_liters = load_target_reading(address)
+        
+        if target_volume_liters is None:
+            if current_volume is not None:
+                save_target_reading(address, current_volume)
+                target_volume_liters = current_volume
+            else:
+                continue
+
+        if current_volume is None: continue 
+
+        print("Mon Addr: %d | Targ: %s | Curr: %s" % (address, target_volume_liters, current_volume))
