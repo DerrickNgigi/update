@@ -86,6 +86,38 @@ def write_single_register(uart, address, register_address, value):
     response = smart_read_modbus(uart, 8)
     return response and verify_crc(response)
 
+def read_valve_status(uart, address):
+    """
+    Performs a single Modbus read of the valve status register.
+    """
+    clear_uart_buffer(uart)
+    # Register 0x0060 is used for equipment control and status 
+    request = build_modbus_request(address, 0x03, 0x0060, 0x01)
+    uart.write(request)
+    
+    # Expected response: 7 bytes [cite: 191]
+    response = smart_read_modbus(uart, 7)
+    
+    if response and len(response) == 7 and verify_crc(response):
+        # Extract lower bits D1:D0 for status 
+        status_bits = response[4] & 0x03
+        if status_bits == 0x01:
+            return "Open"
+        elif status_bits == 0x02:
+            return "Closed"
+    return None
+
+def get_valid_valve_status(uart, address, retries=5, delay=1):
+    """
+    Checks the valve status using the specified retry structure.
+    """
+    for attempt in range(retries):
+        status_value = read_valve_status(uart, address)
+        if status_value is not None:
+            return status_value
+        time.sleep(delay)
+    return "Error/Unknown"
+
 def read_cumulative_flow(uart, address):
     clear_uart_buffer(uart)
     request = build_modbus_request(address, 0x03, 0x000E, 0x02)
@@ -162,9 +194,12 @@ def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqt
         else:
             open_valve(uart, address)
 
-        # 4. Prepare Payload
-        payload = '{"type": "device_report", "device": %d, "cumulative_flow_L": %s, "target_flow": %s}' % (
-            address, cumulative, target_volume_liters
+        # 4. Prepare Payload with Validated Valve Status
+        # Using the new retry-based status checker
+        valve_state = get_valid_valve_status(uart, address)
+        
+        payload = '{"type": "device_report", "device": %d, "cumulative_flow_L": %s, "target_flow": %s, "valve_status": "%s"}' % (
+            address, cumulative, target_volume_liters, valve_state
         )
 
         # 5. Upload

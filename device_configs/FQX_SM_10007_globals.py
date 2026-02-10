@@ -1,14 +1,14 @@
 from machine import UART
 
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.4"
+GLOBAL_VERSION = "1.0.5"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
 VERSION_FILE = "/flash/version.txt"
 
 # ============ MODBUS SLAVE ADDRESSES ============ #
-SLAVE_ADDRESSES = [01, 02, 03, 04, 05, 06]
+SLAVE_ADDRESSES = [01, 02, 03, 04, 05, 06, 07]
 
 # ============ MQTT CONFIGURATION ============ #
 MQTT_BROKER_HOST = "152.42.139.67"
@@ -30,7 +30,11 @@ MQTT_SUB_TOPICS = [
     "smartmeter/FQX_SM_10007-3/sub/controlcomm/message",
     "smartmeter/FQX_SM_10007-4/sub/controlcomm/message",
     "smartmeter/FQX_SM_10007-5/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10007-6/sub/controlcomm/message"
+    "smartmeter/FQX_SM_10007-6/sub/controlcomm/message",
+    "smartmeter/FQX_SM_10007-7/sub/controlcomm/message",
+    "smartmeter/FQX_SM_10007-8/sub/controlcomm/message",
+    "smartmeter/FQX_SM_10007-9/sub/controlcomm/message",
+    "smartmeter/FQX_SM_10007-10/sub/controlcomm/message"
 ]
 
 timer = 180
