@@ -48,3 +48,7 @@ for addr in SLAVE_ADDRESSES:
 VERSION_FILE = "/flash/version.txt"
 timer = 180
 CMD_QUEUE = []
+
+CHECK_INTERVAL = 180   # 3 Minutes
+UPLOAD_INTERVAL = 3600 # 1 Hour
+RESPONSIVE_SLEEP = 5   # Sleep cycle duration

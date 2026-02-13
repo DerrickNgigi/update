@@ -214,9 +214,9 @@ def monitor_loop():
     sys_log("Monitor Loop Started", "INFO")
     
     # --- CONSTANTS (Use consts to save lookup time) ---
-    CHECK_INTERVAL = 180   # 3 Minutes
-    UPLOAD_INTERVAL = 3600 # 1 Hour
-    RESPONSIVE_SLEEP = 5   # Sleep cycle duration
+    CHECK_INTERVAL = globals.CHECK_INTERVAL   # 3 Minutes
+    UPLOAD_INTERVAL = globals.UPLOAD_INTERVAL  # 1 Hour
+    RESPONSIVE_SLEEP = globals.RESPONSIVE_SLEEP  # Sleep cycle duration
     
     # Initialize Timers
     # Set upload time to NOW to force an initial upload (or set to time() + 3600 to wait)
