@@ -5,7 +5,7 @@ from meter import (
     valve_test, get_valid_volume,
     open_valve, close_valve, 
     save_target_reading, load_target_reading,
-    uart
+    uart, get_valid_valve_status
 )
 from ota_update import *
 from machine import UART, Pin
@@ -40,199 +40,325 @@ def sys_log(msg, level="INFO"):
 
         if level == "ERROR" or level == "BOOT":
             with open(LOG_FILE, 'a') as f:
-                f.write(formatted_msg + '\n')
-    except Exception:
-        print(msg) 
+                f.write(formatted_msg + "\n")
+    except:
+        pass
 
 def safe_gc():
-    """Forces garbage collection to prevent fragmentation crashes."""
+    sys_log("Cleaning Memory...", "DEBUG")
     gc.collect()
-    if gc.mem_free() < 10240:
-        sys_log("Low RAM. Rebooting.", "ERROR")
-        sleep(2)
-        machine.reset()
 
+def supervisor_thread():
+    """Independent thread to check if monitor_loop is alive."""
+    global last_alive_tick
+    WDT_TIMEOUT = 600 # 10 minutes
+    
+    while True:
+        if (time() - last_alive_tick) > WDT_TIMEOUT:
+            sys_log("Monitor Loop Frozen! Rebooting...", "ERROR")
+            machine.reset()
+        sleep(30)
+        
 def check_scheduled_restart():
     """Checks for OTA updates at Midnight instead of rebooting."""
     t = localtime()
     # If year > 2024 (time synced) and it is Midnight (00:0X)
     if t[0] > 2024 and t[3] == 0 and 0 <= t[4] < 2: 
         try:
-            update_global_file(globals.MQTT_CLIENT_ID, retries=3)
             run_ota()
         except:
             pass
         sleep(60) # Avoid repeating in same minute
-        
+
 def check_for_update_on_start():
     try:
+        sys_log("Checking for OTA Updates...", "INFO")
         update_global_file(globals.MQTT_CLIENT_ID, retries=3)
         run_ota()
-    except:
-        pass
+    except Exception as e:
+        sys_log("OTA Error: {}".format(e), "ERROR")
 
-# ============ Establish Init Connectio ============ #
 def check_for_initConnection():
     """
-    Runs on boot. 
+    Runs on boot. Optimized for Memory Efficiency.
     1. Checks if a target file exists.
     2. If MISSING: Reads meter and initializes file (Syncs Target = Current).
-    
     """
-    print("[Init] Checking device state...")
+    # 1. Clear memory before starting heavy IO operations
+    gc.collect()
+    sys_log("Checking Init States...", "INFO")
+
     for addr in SLAVE_ADDRESSES:
         try:
+            # Load from file (IO Operation)
             saved_target = load_target_reading(addr)
             
-            # --- AUTO-INITIALIZATION --- #
-            if saved_target is None:
-                print("[Init] No saved state for Addr {}. Reading meter...".format(addr))
-                current_vol = get_valid_volume(uart, addr)
-                
-                if current_vol is not None:
-                    # Initialize: Set Target = Current (No debt)
-                    save_target_reading(addr, current_vol)
-                    print("[Init] Device initialized. Volume: {} L".format(current_vol))
-                else:
-                    print("[Init] ❌ Failed to read meter at Addr {}. Cannot init.".format(addr))
-                continue
-                
-        except Exception as e:
-            print("[Recovery] Error on Addr {}: {}".format(addr, e))
+            # --- CASE 1: STATE EXISTS (Fast Path) ---
+            if saved_target is not None:
+                # Log minimal info to save string memory
+                # sys_log("Addr {} OK.".format(addr), "DEBUG") 
+                saved_target = None # Clear ref
+                continue # Skip to next meter immediately
 
-# ============ COMMAND PROCESSOR (THREAD SAFE) ============ #
-def process_command_queue():
-    """
-    Executes commands from the MQTT thread.
-    This runs inside the Main Thread to ensure UART safety.
-    """
-    while len(globals.CMD_QUEUE) > 0:
-        try:
-            item = globals.CMD_QUEUE.pop(0)
-            cmd = item['type']
-            addr = item['addr'] # This is the hex address (e.g. 6)
-            dev_id = item['device_id']
+            # --- CASE 2: STATE MISSING (Recovery Path) ---
+            sys_log("Addr {} State Missing. Reading...".format(addr), "WARNING")
             
-            print("Processing CMD: {} for Addr {}".format(cmd, addr))
+            # Read Hardware
+            current_vol = get_valid_volume(uart, addr)
             
-            if cmd == "success":
-                # Handle Token Load
-                litres = item['litres']
-                if litres and litres > 0:
-                    current = load_target_reading(addr)
-                    if current is None: current = 0
-                    new_target = current + litres
-                    save_target_reading(addr, new_target)
-                    print("Updated Target: {}".format(new_target))
-                    
-                    # Check valve status immediately after update
-                    monitor_target(uart, [addr])
-                    
-                    meter_mqtts.mqttPublish(meter_mqtts.mqtt, MQTT_PUB_TOPIC, json.dumps({
-                        "type": "device_report", "device": dev_id, "status": "load_success"
-                    }))
+            if current_vol is not None:
+                # Save to file
+                save_target_reading(addr, current_vol)
+                sys_log("Init Addr {}: {} L".format(addr, current_vol), "INFO")
+            else:
+                sys_log("Init Failed Addr {}".format(addr), "ERROR")
 
-            elif cmd == "valve_open":
-                open_valve(uart, addr)
-                meter_mqtts.mqttPublish(meter_mqtts.mqtt, MQTT_PUB_TOPIC, json.dumps({
-                    "type": "device_report", "device": dev_id, "status": "valve_open"
-                }))
-
-            elif cmd == "valve_close":
-                close_valve(uart, addr)
-                meter_mqtts.mqttPublish(meter_mqtts.mqtt, MQTT_PUB_TOPIC, json.dumps({
-                    "type": "device_report", "device": dev_id, "status": "valve_closed"
-                }))
-                
         except Exception as e:
-            print("Queue Error: {}".format(e))
+            sys_log("Init Err {}: {}".format(addr, e), "ERROR")
         
-        # Small sleep between commands to let UART settle
-        sleep(1)
+        # 2. CRITICAL: Clear loop variables to prevent heap fragmentation
+        saved_target = None
+        current_vol = None
+        
+    # 3. Final Cleanup: Compacting memory before Main Loop starts
+    gc.collect()
 
-# ============ SUPERVISOR THREAD (WDT MANAGER) ============ #
-def supervisor_thread():
+def perform_ciu_health_check(uart):
     """
-    Feeds the Hardware Watchdog.
-    Reboots if Main Thread hangs for > 20 minutes.
+    Highly Optimized CIU Health Check.
+    - Zero Leakage: Aggressive variable cleanup.
+    - Fail Fast: Returns immediately on config errors.
+    - Memory Efficient: Cleans heap before and after heavy JSON ops.
     """
+    # 1. Clear Heap before allocation to reduce fragmentation
+    safe_gc()
+    sys_log("Starting CIU Health Check...", "INFO")
+
+    # 2. Retrieve Config (Fail Fast)
+    target_url = getattr(globals, 'CIU_CALLBACK_URL', None)
+    addresses = getattr(globals, 'SLAVE_ADDRESSES', [])
+    
+    if not target_url or not addresses:
+        sys_log("CIU Error: Missing URL or Addresses", "ERROR")
+        return
+
+    # 3. Collect Data (Minimize intermediate objects)
+    slave_results = []
+    
+    for addr in addresses:
+        # Optimization: retries=1 avoids blocking loop on dead meters
+        v_stat = get_valid_valve_status(uart, addr, retries=1)
+        is_online = (v_stat is not None and v_stat != "Unknown")
+        
+        slave_results.append({
+            "slave_address": addr,
+            "connection_status": "online" if is_online else "check connection",
+            "valve_status": v_stat if is_online else "unknown"
+        })
+        # Optional: Feed watchdog if list is huge
+        # global last_alive_tick; last_alive_tick = time.time()
+
+    # 4. Build Payload
+    # Get ID inside function to handle dynamic changes if any
+    dev_id = getattr(globals, 'MQTT_CLIENT_ID', 'UNKNOWN')
+    
+    payload = {
+        "main_device_id": dev_id,
+        "report_type": "ciu_health_check",
+        "slaves": slave_results
+    }
+
+    # 5. Send HTTP POST (urequests)
+    response = None
     try:
-        machine.WDT(True) # Enable LoBo Fixed WDT (approx 15s)
-        sys_log("WDT Enabled")
-    except:
-        sys_log("WDT Init Fail")
-
-    while True:
-        # Check if Main Thread has reported alive recently
-        if (time() - last_alive_tick) < 1200: # 20 Minutes Limit
-            machine.resetWDT() # Feed the dog
+        sys_log("Posting to {}...".format(target_url), "DEBUG")
+        
+        # 'json' param handles serialization efficiently
+        response = urequests.post(target_url, json=payload)
+        
+        if 200 <= response.status_code < 300:
+            sys_log("CIU Sent. Status: {}".format(response.status_code), "INFO")
         else:
-            print("System HUNG > 20 mins. Allowing WDT Reboot...")
-            # We intentionally STOP feeding. Hardware resets in ~15s.
+            sys_log("CIU Failed. Status: {}".format(response.status_code), "ERROR")
+            
+    except Exception as e:
+        sys_log("CIU Post Error: {}".format(e), "ERROR")
         
-        # Blink LED to show life
-        led.value(not led.value())
+    finally:
+        # 6. CRITICAL CLEANUP SECTION
+        if response:
+            try:
+                response.close() # Always close socket
+            except:
+                pass
         
-        # Must sleep LESS than hardware timeout (15s)
-        sleep(5) 
+        # Explicitly break references to large objects
+        slave_results = None
+        payload = None
+        response = None
+        
+        # Force collection immediately to prevent heap growth
+        safe_gc()
 
-# ============ MONITOR THREAD (MAIN WORKER) ============ #
+
+# ============ MONITORING CORE ============ #
+
 def monitor_loop():
+    """
+    Highly Optimized Main Logic Loop.
+    - Zero Memory Leak Design: Explicit GC after uploads.
+    - High Responsiveness: Checks Queue every 1s.
+    - Robust Error Handling: Catches all exceptions to keep loop alive.
+    """
     global last_alive_tick
+    sys_log("Monitor Loop Started", "INFO")
     
-    # Wait for other threads to stabilize
-    sleep(10)
+    # --- CONSTANTS (Use consts to save lookup time) ---
+    CHECK_INTERVAL = 180   # 3 Minutes
+    UPLOAD_INTERVAL = 3600 # 1 Hour
+    RESPONSIVE_SLEEP = 5   # Sleep cycle duration
     
+    # Initialize Timers
+    # Set upload time to NOW to force an initial upload (or set to time() + 3600 to wait)
+    # We set it to time() to prevent immediate upload race condition at boot
+    last_upload_time = time() 
+    last_check_time = time()
+    
+    # Pre-allocate reuseable variables to avoid fragmentation
+    current_time = 0
+    cmd_item = None
+    
+    # Force initial cleanup
+    gc.collect()
+
     while True:
         try:
-            # 1. Report Alive
-            last_alive_tick = time()
-            safe_gc()
-            check_scheduled_restart()
+            current_time = time()
+            last_alive_tick = current_time # Feed Supervisor
 
-            # 2. Process pending MQTT commands (Safe UART access)
-            process_command_queue()
+            # =================================================
+            # 1. IMMEDIATE COMMAND PROCESSING
+            # =================================================
+            if globals.CMD_QUEUE:
+                sys_log("Processing Queue...", "DEBUG")
+                
+                # Process only 1 command per loop to prevent blocking
+                # (or process all if critical, but 1 per loop is safer for RAM)
+                while globals.CMD_QUEUE:
+                    cmd_item = globals.CMD_QUEUE.pop(0)
+                    
+                    # Extract safely
+                    cmd = cmd_item.get('cmd')
+                    addr = cmd_item.get('addr')
+                    dev_id = cmd_item.get('dev_id')
+                    
+                    sys_log("CMD: {} -> {}".format(cmd, dev_id), "INFO")
 
-            # 3. Check Connection
-            if gsmCheckStatus() != 1:
-                sys_log("GSM Lost. Rebooting.")
-                machine.reset()
+                    # --- Command Logic ---
+                    if cmd == "check_update":
+                        sys_log("Manual OTA...", "INFO")
+                        check_for_update_on_start()
+                    
+                    elif cmd == "check_status":
+                        sys_log("Manual Status...", "INFO")
+                        read_meter_parameters_upload(
+                            uart, SLAVE_ADDRESSES, 
+                            meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                        )
 
-            # 4. Upload Data (Only if MQTT is connected)
-            # Use 'meter_mqtts.mqtt' directly to avoid stale reference
-            if meter_mqtts.mqtt is not None and meter_mqtts.mqtt.status()[0] == 2:
-                try:
-                    last_alive_tick = time()
-                    read_meter_parameters_upload(
-                        uart, 
-                        SLAVE_ADDRESSES, 
-                        meter_mqtts.mqttPublish, 
-                        meter_mqtts.mqtt, 
-                        MQTT_PUB_TOPIC
-                    )
-                except Exception as e:
-                    print("Upload Err:", e)
+                    elif cmd == "success" and addr:
+                        litres = cmd_item.get('litres', 0)
+                        if litres > 0:
+                            # 1. Update Target
+                            curr = load_target_reading(addr)
+                            if curr is None: curr = 0
+                            new_target = curr + litres
+                            save_target_reading(addr, new_target)
+                            
+                            # 2. Publish Confirmation
+                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                                "type": "device_report", "device": dev_id, 
+                                "status": "load_success", "new_target": new_target
+                            }))
 
-            # Sleep logic is simple now because Supervisor handles WDT
-            print("Sleeping {}s...".format(globals.timer))
-            last_alive_tick = time() 
-            sleep(globals.timer)
-            last_alive_tick = time() # Update immediately on wake
+                            # 3. Enforce Valve (5 Arguments Required)
+                            monitor_target(
+                                uart, [addr], 
+                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                            )
+
+                    elif cmd == "valve_open" and addr:
+                        open_valve(uart, addr)
+                        meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                            "type": "device_report", "device": dev_id, "status": "valve_open"
+                        }))
+                    
+                    elif cmd == "valve_close" and addr:
+                        close_valve(uart, addr)
+                        meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                            "type": "device_report", "device": dev_id, "status": "valve_closed"
+                        }))
+                        
+                    # --- NEW: HANDLE CUI CHECK ---
+                    elif cmd == "ciu_health_check":
+                        perform_ciu_health_check(uart)
+                    
+                    cmd_item = None
+                    last_alive_tick = time() # Feed watchdog after cmd processing
+
+            # =================================================
+            # 2. SCHEDULED LOCAL CHECK (Every 3 Mins)
+            # =================================================
+            if (current_time - last_check_time) >= CHECK_INTERVAL:
+                # sys_log("3-Min Check", "DEBUG")
+                monitor_target(
+                    uart, SLAVE_ADDRESSES, 
+                    meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                )
+                last_check_time = current_time
+                # Clean RAM after check
+                gc.collect()
+
+            # =================================================
+            # 3. SCHEDULED SERVER UPLOAD (Every 1 Hour)
+            # =================================================
+            if (current_time - last_upload_time) >= UPLOAD_INTERVAL:
+                sys_log("1-Hour Upload...", "INFO")
+                read_meter_parameters_upload(
+                    uart, SLAVE_ADDRESSES, 
+                    meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                )
+                last_upload_time = current_time
+                
+                # CRITICAL: Reclaim memory after heavy upload JSON building
+                gc.collect() 
 
         except Exception as e:
-            sys_log("Loop Crash: " + str(e))
-            sleep(5)
-            machine.reset()
+            sys_log("Loop Error: {}".format(e), "ERROR")
+            # If error occurred, wait slightly longer to let system stabilize
+            sleep(2)
+            gc.collect()
+
+        # =================================================
+        # 4. RESPONSIVE WAIT (Feed Watchdog)
+        # =================================================
+        # We break the 5s sleep into 1s chunks to keep the loop responsive
+        # AND to feed the watchdog variable frequently.
+        for _ in range(RESPONSIVE_SLEEP):
+            last_alive_tick = time() # Feed Supervisor every second
+            if globals.CMD_QUEUE:
+                break # Wake up immediately
+            sleep(1)
 
 # ============ MAIN EXECUTION ============ #
 def main():
     gc.enable()
-    
     sys_log("Booting...", "BOOT")
     led.value(1)
     sleep(2)
     led.value(0)
     
+    # 1. Clear RAM before starting
     safe_gc()
 
     try:
@@ -243,7 +369,6 @@ def main():
         while gsmCheckStatus() != 1:
             print("Waiting for GSM...")
             led.value(not led.value())
-            
             sleep(1)
             wait += 1
             if wait > 120: 
@@ -253,31 +378,35 @@ def main():
         sys_log("GSM Connected.", "INFO")
         led.value(0)
         
+        # 2. Run OTA Check
         check_for_update_on_start()
         
-        sys_log("Check Init Store File.", "INFO")
+        # 3. Initialize Memory/State
         check_for_initConnection()
 
-        # 1. Start MQTT Listener (Receives -> Queue)
-        _thread.start_new_thread("MqttListener", meter_mqtts.mqttInitialize, (meter_mqtts.mqtt, MQTT_SUB_TOPICS,))
+        # 4. Start Helper Threads (These are light and fine as threads)
+        try:
+            _thread.start_new_thread(meter_mqtts.mqttInitialize, (meter_mqtts.mqtt, MQTT_SUB_TOPICS,))
+        except TypeError:
+             _thread.start_new_thread("MqttListener", meter_mqtts.mqttInitialize, (meter_mqtts.mqtt, MQTT_SUB_TOPICS,))
         
-        # 2. Start Supervisor (Feeds WDT)
-        _thread.start_new_thread("Supervisor", supervisor_thread, ())
+        try:
+            _thread.start_new_thread(supervisor_thread, ())
+        except TypeError:
+            _thread.start_new_thread("Supervisor", supervisor_thread, ())
 
-        # 3. Start Monitor (Consumes Queue + Reads UART)
+        # 5. RUN MONITOR LOOP IN MAIN THREAD (Fixes Stack Overflow)
+        sys_log("System Running - Entering Monitor Loop", "INFO")
         sleep(5) 
-        _thread.start_new_thread("MeterMonitor", monitor_loop, ())
-
-        sys_log("System Running", "INFO")
         
-        # Keep Main Thread Alive
-        while True:
-            sleep(10)
+        # Call the function directly instead of _thread.start_new_thread
+        monitor_loop()
 
     except Exception as e:
-        sys_log("Main Crash: {}".format(e), "ERROR")
-        sleep(5)
+        sys_log("Critical System Failure: {}".format(e), "ERROR")
+        sleep(10)
         machine.reset()
 
 if __name__ == "__main__":
     main()
+

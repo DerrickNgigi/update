@@ -4,6 +4,7 @@ from meter_storage import *
 import json
 
 # ========== UART CONFIG ==========
+# Configure UART for Modbus communication (9600 baud, 8N1)
 uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)
 
 # ========== HELPER: CLEAR BUFFER ==========
@@ -82,51 +83,75 @@ def write_single_register(uart, address, register_address, value):
     frame += bytearray([crc & 0xFF, (crc >> 8) & 0xFF])
     
     uart.write(frame)
-    # Wait for response (8 bytes for Write command)
     response = smart_read_modbus(uart, 8)
     return response and verify_crc(response)
 
+# ========== STATUS & DIAGNOSTIC FUNCTIONS ==========
+
 def read_valve_status(uart, address):
     """
-    Performs a single Modbus read of the valve status register.
+    Performs a single Modbus read of the equipment control register (0x0060).
     """
     clear_uart_buffer(uart)
-    # Register 0x0060 is used for equipment control and status 
     request = build_modbus_request(address, 0x03, 0x0060, 0x01)
     uart.write(request)
-    
-    # Expected response: 7 bytes [cite: 191]
     response = smart_read_modbus(uart, 7)
     
     if response and len(response) == 7 and verify_crc(response):
-        # Extract lower bits D1:D0 for status 
-        status_bits = response[4] & 0x03
-        if status_bits == 0x01:
-            return "Open"
-        elif status_bits == 0x02:
-            return "Closed"
+        status_bits = response[4] & 0x03 # D1:D0
+        if status_bits == 0x01: return "Open"
+        if status_bits == 0x02: return "Closed"
     return None
 
 def get_valid_valve_status(uart, address, retries=5, delay=1):
-    """
-    Checks the valve status using the specified retry structure.
-    """
     for attempt in range(retries):
-        status_value = read_valve_status(uart, address)
-        if status_value is not None:
-            return status_value
+        status = read_valve_status(uart, address)
+        if status: return status
         time.sleep(delay)
-    return "Error/Unknown"
+    return "Unknown"
+
+def read_general_status(uart, address):
+    """
+    Reads the General Status Register (ST) at 0x0001 for hardware health.
+    """
+    clear_uart_buffer(uart)
+    request = build_modbus_request(address, 0x03, 0x0001, 0x01)
+    uart.write(request)
+    response = smart_read_modbus(uart, 7)
+    
+    if response and len(response) == 7 and verify_crc(response):
+        st_val = (response[3] << 8) | response[4]
+        return {
+            "battery": "Low" if (st_val & 0x0001) else "Good",
+            "pipe_empty": "EMPTY (No Water)" if (st_val & 0x0002) else "Full (Normal)",
+            "sensor_error": bool(st_val & 0x0010)
+        }
+    return None
+
+def get_valid_health_data(uart, address, retries=3, delay=0.5):
+    for _ in range(retries):
+        data = read_general_status(uart, address)
+        if data: return data
+        time.sleep(delay)
+    return {"battery": "Unknown", "pipe_empty": "Unknown", "sensor_error": False}
+
+# ========== FLOW & VALVE CONTROL ==========
 
 def read_cumulative_flow(uart, address):
     clear_uart_buffer(uart)
     request = build_modbus_request(address, 0x03, 0x000E, 0x02)
     uart.write(request)
     response = smart_read_modbus(uart, 9)
-    
     if response and len(response) == 9 and verify_crc(response):
-        if response[0] == address:
-            return (response[3] << 8) | response[4]
+        return (response[3] << 8) | response[4]
+    return None
+
+def get_valid_volume(uart, address, retries=5, delay=1):
+    for attempt in range(retries):
+        volume_value = read_cumulative_flow(uart, address)
+        if volume_value is not None:
+            return volume_value
+        time.sleep(delay)
     return None
 
 def open_valve(uart, device_address):
@@ -137,76 +162,120 @@ def close_valve(uart, device_address):
     write_single_register(uart, device_address, 0x0060, 0x0002)
     time.sleep(0.5)
 
-def get_valid_volume(uart, address, retries=5, delay=1):
-    for attempt in range(retries):
-        volume_value = read_cumulative_flow(uart, address)
-        if volume_value is not None:
-            return volume_value
-        time.sleep(delay)
-    return None
+# ========== MONITORING FUNCTIONS ==========
 
-def monitor_target(uart, addresses):
+def monitor_target(uart, addresses, publish_func, mqtt_client, mqtt_topic):
     """
-    Standard monitoring function (kept for reference or standalone use).
+    Standard monitoring with integrated ALERTING.
+    Direct logic execution: No extra flags.
     """
     for address in addresses:
         current_volume = get_valid_volume(uart, address)
-        time.sleep(0.2)
+        
+        # --- ALERT LOGIC: Connection Failure ---
+        if current_volume is None:
+            try:
+                payload = json.dumps({
+                    "type": "device_report", 
+                    "device": address, 
+                    "cumulative_flow_L": None,
+                    "target_flow_L": None,
+                    "alert": "No meter connection"
+                })
+                publish_func(mqtt_topic, payload)
+            except:
+                pass
+            continue 
+
+        # --- NORMAL LOGIC ---
         target_volume_liters = load_target_reading(address)
         
         if target_volume_liters is None:
-            if current_volume is not None:
-                save_target_reading(address, current_volume)
-                target_volume_liters = current_volume
-            else:
-                continue
+            save_target_reading(address, current_volume)
+            target_volume_liters = current_volume
 
-        if current_volume is None: continue 
-
-        print("Mon Addr: %d | Targ: %s | Curr: %s" % (address, target_volume_liters, current_volume))
-
+        # Enforce Logic & Direct Upload
         if current_volume >= target_volume_liters:
             close_valve(uart, address)
+            try:
+                read_meter_parameters_upload(uart, [address], publish_func, mqtt_client, mqtt_topic)
+            except:
+                pass
         else:
             open_valve(uart, address)
+
+
+def read_meter_parameters(uart, addresses):
+    """
+    Reads parameters for local display/logging without MQTT.
+    """
+    for address in addresses:
+        current_volume = get_valid_volume(uart, address)
+        if current_volume is None: 
+            continue 
+        health = get_valid_health_data(uart, address)
+        valve_state = get_valid_valve_status(uart, address)
 
 def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqtt_topic):
     """
-    Reads meter, enforces valve target logic locally, THEN uploads to MQTT.
+    Reads meter, enforces valve logic locally, and uploads detailed report to MQTT.
     """
     for address in addresses:
-        # 1. Read Meter
+        # 1. Read Flow Data
         cumulative = get_valid_volume(uart, address)
-        if cumulative is None: continue
         
-        # 2. Check Target
-        target_volume_liters = load_target_reading(address)
-        if target_volume_liters is None:
+        # FIX 1: Check 'cumulative', not 'current_volume'
+        if cumulative is None:
+            try:
+                payload = json.dumps({
+                    "type": "device_report", 
+                    "device": address, 
+                    "cumulative_flow_L": None,
+                    "target_flow_L": None,
+                    "alert": "No meter connection"
+                })
+                # FIX 2: Ensure publish_func is called correctly (usually takes topic, msg)
+                # Some libraries use client.publish(topic, msg), others just publish(topic, msg)
+                # Based on your main.py: meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, payload)
+                publish_func(mqtt_topic, payload)
+            except:
+                pass
+            continue 
+        
+        # 2. Check and Enforce Target
+        target_volume = load_target_reading(address)
+        if target_volume is None:
             save_target_reading(address, cumulative)
-            target_volume_liters = cumulative
+            target_volume = cumulative
         
-        print("Read OK: Curr %s L | Targ %s L" % (cumulative, target_volume_liters))
-
-        # 3. ENFORCE MONITOR TARGET (Valve Control)
-        # We do this immediately to prevent network latency (crushing) from delaying the valve close
-        if cumulative >= target_volume_liters:
+        # FIX 3: Use consistent variable names ('cumulative' vs 'target_volume')
+        if cumulative >= target_volume:
             close_valve(uart, address)
+            # Note: We are ALREADY inside the upload function. 
+            # Recursively calling read_meter_parameters_upload here is dangerous (infinite loop risk).
+            # Instead, just let the flow continue to step 4 to upload the status "Closed".
         else:
             open_valve(uart, address)
 
-        # 4. Prepare Payload with Validated Valve Status
-        # Using the new retry-based status checker
+        # 3. Read Health Variations
         valve_state = get_valid_valve_status(uart, address)
+        health = get_valid_health_data(uart, address)
         
-        payload = '{"type": "device_report", "device": %d, "cumulative_flow_L": %s, "target_flow": %s, "valve_status": "%s"}' % (
-            address, cumulative, target_volume_liters, valve_state
-        )
+        # 4. Upload Comprehensive Payload
+        payload = json.dumps({
+            "type": "device_report",
+            "device": address,
+            "cumulative_flow_L": cumulative,
+            "target_flow_L": target_volume,
+            "valve_status": valve_state,
+            "pipe_status": health["pipe_empty"],
+            "battery_status": health["battery"]
+        })
 
-        # 5. Upload
         try:
-            publish_func(mqtt_client, mqtt_topic, payload)
-        except:
-            pass
+            publish_func(mqtt_topic, payload)
+        except Exception as e:
+            print("Publish Error:", e)
 
 def valve_test(uart, addresses):
     for address in addresses:
@@ -215,23 +284,3 @@ def valve_test(uart, addresses):
     for address in addresses:
         open_valve(uart, address)
     time.sleep(2)
-    
-def read_meter_parameters(uart, addresses):
-    """
-    Standard monitoring function (kept for reference or standalone use).
-    """
-    for address in addresses:
-        current_volume = get_valid_volume(uart, address)
-        time.sleep(0.2)
-        target_volume_liters = load_target_reading(address)
-        
-        if target_volume_liters is None:
-            if current_volume is not None:
-                save_target_reading(address, current_volume)
-                target_volume_liters = current_volume
-            else:
-                continue
-
-        if current_volume is None: continue 
-
-        print("Mon Addr: %d | Targ: %s | Curr: %s" % (address, target_volume_liters, current_volume))

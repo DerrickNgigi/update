@@ -43,26 +43,38 @@ def datacb(msg):
 
     try:
         payload = json.loads(msg[2])
-        message = payload.get('message')
-        litres = payload.get('litres')
-        deviceID = payload.get('deviceID')
+        cmd = payload.get('message') # The command string
+        dev_id = payload.get('deviceID')
+        litres = payload.get('litres', 0)
         
-        hex_address = get_device_Hex(deviceID)
+        # 1. Handle System Commands (No specific address needed)
+        if cmd == "check_update" or cmd == "check_status":
+             globals.CMD_QUEUE.append({
+                "cmd": cmd,
+                "addr": None,
+                "dev_id": dev_id,
+                "litres": 0
+            })
+             print("Queued System Command: {}".format(cmd))
+             return
+
+        # 2. Handle Device-Specific Commands
+        addr = get_device_Hex(dev_id)
         
-        if not hex_address:
+        if not addr:
             print("Invalid Device ID")
             return
 
-        # Add to Queue for Main Thread to process
+        # Pass raw data to queue for Main Thread to process
         cmd_data = {
-            "type": message,
-            "addr": hex_address,
-            "litres": litres,
-            "device_id": deviceID
+            "cmd": cmd,
+            "addr": addr,
+            "dev_id": dev_id,
+            "litres": litres
         }
         
         globals.CMD_QUEUE.append(cmd_data)
-        print("queued: {}".format(message))
+        print("Queued Device Command: {}".format(cmd))
 
     except Exception as e:
         print("MQTT Parse Error: {}".format(e))
