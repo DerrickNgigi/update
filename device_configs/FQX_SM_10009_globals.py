@@ -1,42 +1,54 @@
-# ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.5"
+# ============ USER CONFIGURATION (EDIT HERE) ============ #
+GLOBAL_VERSION = "1.2.5"
 
-# ====== Configuration ======
-UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
-VERSION_FILE = "/flash/version.txt"
+# 1. Device Identification
+DEVICE_ID = "FQX_SM_10009" 
 
-# ============ MODBUS SLAVE ADDRESSES ============ #
-SLAVE_ADDRESSES = [1, 2, 3, 4, 5, 6]
+# 2. Modbus Slave IDs (List all connected meters here)
+SLAVE_ADDRESSES = [1]
 
-# ============ MQTT CONFIGURATION ============ #
+# 3. Connection Settings
 MQTT_BROKER_HOST = "152.42.139.67"
 MQTT_BROKER_PORT = 18100
-MQTT_CLIENT_ID = "FQX_SM_10009"
-MQTT_CLIENT_USERNAME = "FQX_SM_10009"
-MQTT_CLIENT_PASSWORD = "FQX_SM@10009"
+UPDATE_URL = "http://raw.githubusercontent.com/DerrickNgigi/update/main"
+CIU_CALLBACK_URL = "https://backend2.mteja.co.ke/mqttcomms/callback/ciu-check"
 
-MQTT_PUB_TOPIC = 'smartmeter/FQX_SM_10009/pub/controlcomm/message'
-
-# ============ GSM CONFIGURATION ============ #
+# 4. GSM Settings
 GSM_APN = 'safaricomiot'
 GSM_USER = ''
 GSM_PASS = ''
 
-MQTT_SUB_TOPICS = [
-    "smartmeter/FQX_SM_10009-1/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-2/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-3/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-4/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-5/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-6/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-7/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-8/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-9/sub/controlcomm/message",
-    "smartmeter/FQX_SM_10009-10/sub/controlcomm/message"
-]
+# ============ AUTOMATED CONFIGURATION (DO NOT EDIT) ============ #
 
+# 1. Auto-Generate MQTT Credentials
+MQTT_CLIENT_ID = DEVICE_ID
+MQTT_CLIENT_USERNAME = DEVICE_ID
+
+# Auto-generate Password: "FQX_SM_100010" -> "FQX_SM@100010"
+# Logic: Replaces the last underscore with an '@' symbol
+try:
+    _prefix, _suffix = DEVICE_ID.rsplit('_', 1)
+    MQTT_CLIENT_PASSWORD = "{}@{}".format(_prefix, _suffix)
+except ValueError:
+    # Fallback if no underscore found
+    MQTT_CLIENT_PASSWORD = DEVICE_ID 
+
+# 2. Auto-Generate Publication Topic
+# Topic: smartmeter/FQX_SM_100010/pub/controlcomm/message
+MQTT_PUB_TOPIC = "smartmeter/{}/pub/controlcomm/message".format(DEVICE_ID)
+
+# 3. Auto-Generate Subscription Topics (One per Slave Address)
+# Topic: smartmeter/FQX_SM_100010-16/sub/controlcomm/message
+MQTT_SUB_TOPICS = []
+for addr in SLAVE_ADDRESSES:
+    topic = "smartmeter/{}-{}/sub/controlcomm/message".format(DEVICE_ID, addr)
+    MQTT_SUB_TOPICS.append(topic)
+
+# 4. Other Globals
+VERSION_FILE = "/flash/version.txt"
 timer = 180
-
-# ============ COMMAND QUEUE (THREAD SAFE) ============ #
-# MQTT thread puts commands here. Main thread executes them.
 CMD_QUEUE = []
+
+CHECK_INTERVAL = 180   # 3 Minutes
+UPLOAD_INTERVAL = 3600 # 1 Hour
+RESPONSIVE_SLEEP = 5   # Sleep cycle duration
