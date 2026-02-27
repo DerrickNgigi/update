@@ -1,5 +1,5 @@
 # ============ USER CONFIGURATION (EDIT HERE) ============ #
-GLOBAL_VERSION = "1.2.5"
+GLOBAL_VERSION = "1.2.8"
 
 # 1. Device Identification
 DEVICE_ID = "FQX_SM_10009" 
