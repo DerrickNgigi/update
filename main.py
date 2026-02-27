@@ -31,7 +31,7 @@ last_alive_tick = time()
 
 # ============ UTILITIES ============ #
 def sys_log(msg, level="INFO"):
-    """Logs messages to console and file (only errors)."""
+    """Logs messages to console and file. Limits file to ~50KB to prevent storage overflow."""
     try:
         t = localtime()
         timestamp = "{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[1], t[2], t[3], t[4], t[5])
@@ -39,7 +39,16 @@ def sys_log(msg, level="INFO"):
         print(formatted_msg)
 
         if level == "ERROR" or level == "BOOT":
-            with open(LOG_FILE, 'a') as f:
+            write_mode = 'a'
+            
+            try:
+                if os.stat(LOG_FILE)[6] > 31200:
+                    write_mode = 'w'
+                    formatted_msg = "[{}] [SYSTEM] Log file exceeded 50KB. Wiped and restarted.\n".format(timestamp) + formatted_msg
+            except OSError:
+                pass
+
+            with open(LOG_FILE, write_mode) as f:
                 f.write(formatted_msg + "\n")
     except:
         pass

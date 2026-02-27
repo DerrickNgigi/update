@@ -10,7 +10,7 @@ SLAVE_ADDRESSES = [1]
 # 3. Connection Settings
 MQTT_BROKER_HOST = "152.42.139.67"
 MQTT_BROKER_PORT = 18100
-UPDATE_URL = "http://raw.githubusercontent.com/DerrickNgigi/update/main"
+UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
 CIU_CALLBACK_URL = "https://backend2.mteja.co.ke/mqttcomms/callback/ciu-check"
 
 # 4. GSM Settings
