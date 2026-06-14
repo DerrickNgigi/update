@@ -176,78 +176,89 @@ def update_global_file(device_id, retries=3):
     current_version = get_version_from_file(dest_path)
     log("Checking globals.py (Current Config Version: {})".format(current_version))
 
-    for attempt in range(1, retries + 1):
-        try:
-            # Download to temp
-            res_code, hdr, body = curl.get(url, tmp_path)
+    # --- NEW: Safely disable WDT during slow network request ---
+    machine.WDT(False)
+    try:
+        for attempt in range(1, retries + 1):
+            try:
+                # Download to temp
+                res_code, hdr, body = curl.get(url, tmp_path)
 
-            if res_code == 0 and "200" in hdr:
-                new_version = get_version_from_file(tmp_path)
-                
-                if is_newer(new_version, current_version):
-                    log("✅ New Config Found: {} (Old: {})".format(new_version, current_version))
+                if res_code == 0 and "200" in hdr:
+                    new_version = get_version_from_file(tmp_path)
                     
-                    if file_exists(dest_path):
-                        uos.remove(dest_path)
-                    uos.rename(tmp_path, dest_path)
-                    
-                    log("✅ globals.py updated successfully.")
-                    return True # Update Occurred
+                    if is_newer(new_version, current_version):
+                        log("✅ New Config Found: {} (Old: {})".format(new_version, current_version))
+                        
+                        if file_exists(dest_path):
+                            uos.remove(dest_path)
+                        uos.rename(tmp_path, dest_path)
+                        
+                        log("✅ globals.py updated successfully.")
+                        return True # Update Occurred
+                    else:
+                        log("Config up to date (Server: {})".format(new_version))
+                        if file_exists(tmp_path): uos.remove(tmp_path)
+                        return False # No update needed
                 else:
-                    log("Config up to date (Server: {})".format(new_version))
-                    if file_exists(tmp_path): uos.remove(tmp_path)
-                    return False # No update needed
-            else:
-                if attempt == retries:
-                    log("❌ Config Check Failed (Code {})".format(res_code))
+                    if attempt == retries:
+                        log("❌ Config Check Failed (Code {})".format(res_code))
 
-        except Exception as e:
-            log("⚠️ Config Check Error: {}".format(e))
-        
-        sleep(1)
+            except Exception as e:
+                log("⚠️ Config Check Error: {}".format(e))
+            
+            sleep(1)
 
-    return False
+        return False
+    finally:
+        # Guarantee WDT turns back on even if download crashes
+        machine.WDT(True)
 
 # ====== MAIN RUN FUNCTION ======
 def run_ota():
-    gc.collect()
-    print("Free mem:", gc.mem_free())
+    # --- NEW: Safely disable WDT during entire OTA process ---
+    machine.WDT(False)
+    try:
+        gc.collect()
+        print("Free mem:", gc.mem_free())
 
-    print("📡 Initializing GSM module for OTA...")
-    
-    if gsmCheckStatus() != 1:
-        gsmInitialization()
+        print("📡 Initializing GSM module for OTA...")
+        
+        if gsmCheckStatus() != 1:
+            gsmInitialization()
 
-    gc.collect()
-    sleep(2)
+        gc.collect()
+        sleep(2)
 
-    reboot_required = False
-    
-    # --- 1. Global Config Check ---
-    log("--- Step 2: Device Configuration ---")
-    device_id = globals.MQTT_CLIENT_ID 
-    
-    if update_global_file(device_id):
-        reboot_required = True
-        log("✅ Device configuration updated.")
-
-    # --- 2. System Update Check ---
-    log("--- Step 1: System Firmware ---")
-    new_system_version = check_for_system_update()
-    
-    if new_system_version:
-        log("Starting System Update...")
-        if download_and_replace_files(FILES_TO_UPDATE):
-            save_local_version(new_system_version)
+        reboot_required = False
+        
+        # --- 1. Global Config Check ---
+        log("--- Step 2: Device Configuration ---")
+        device_id = globals.MQTT_CLIENT_ID 
+        
+        if update_global_file(device_id):
             reboot_required = True
-            log("✅ System files updated.")
+            log("✅ Device configuration updated.")
 
+        # --- 2. System Update Check ---
+        log("--- Step 1: System Firmware ---")
+        new_system_version = check_for_system_update()
+        
+        if new_system_version:
+            log("Starting System Update...")
+            if download_and_replace_files(FILES_TO_UPDATE):
+                save_local_version(new_system_version)
+                reboot_required = True
+                log("✅ System files updated.")
 
-
-    # --- 3. Final Decision ---
-    if reboot_required:
-        log("🔄 UPDATES APPLIED. REBOOTING IN 3 SECONDS...")
-        sleep(3)
-        machine.reset()
-    else:
-        log("✅ No updates found. Continuing normal boot.")
+        # --- 3. Final Decision ---
+        if reboot_required:
+            log("🔄 UPDATES APPLIED. REBOOTING IN 3 SECONDS...")
+            sleep(3)
+            machine.reset()
+        else:
+            log("✅ No updates found. Continuing normal boot.")
+            
+    finally:
+        # Only reached if no update is applied or download crashes
+        machine.WDT(True)

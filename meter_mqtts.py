@@ -3,6 +3,7 @@ import utime
 import globals
 import json
 import machine
+import _thread
 
 # Global Variables
 MQTT_BROKER_HOST = globals.MQTT_BROKER_HOST
@@ -28,7 +29,6 @@ def conncb(task):
 
 def disconncb(task):
     print("[{}] Disconnected".format(task))
-    machine.reset()
 
 def subscb(task):
     print("[{}] Subscribed".format(task))
@@ -49,14 +49,16 @@ def datacb(msg):
         
         # 1. Handle System Commands (No specific address needed)
         if cmd == "check_update" or cmd == "check_status":
-             globals.CMD_QUEUE.append({
+            _thread.lock()
+            globals.CMD_QUEUE.append({
                 "cmd": cmd,
                 "addr": None,
                 "dev_id": dev_id,
                 "litres": 0
             })
-             print("Queued System Command: {}".format(cmd))
-             return
+            _thread.unlock()
+            print("Queued System Command: {}".format(cmd))
+            return
 
         # 2. Handle Device-Specific Commands
         addr = get_device_Hex(dev_id)
@@ -73,7 +75,10 @@ def datacb(msg):
             "litres": litres
         }
         
+        _thread.lock()
         globals.CMD_QUEUE.append(cmd_data)
+        _thread.unlock()
+        
         print("Queued Device Command: {}".format(cmd))
 
     except Exception as e:

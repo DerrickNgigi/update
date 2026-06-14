@@ -132,84 +132,6 @@ def check_for_initConnection():
     # 3. Final Cleanup: Compacting memory before Main Loop starts
     gc.collect()
 
-def perform_ciu_health_check(uart):
-    """
-    Highly Optimized CIU Health Check.
-    - Zero Leakage: Aggressive variable cleanup.
-    - Fail Fast: Returns immediately on config errors.
-    - Memory Efficient: Cleans heap before and after heavy JSON ops.
-    """
-    # 1. Clear Heap before allocation to reduce fragmentation
-    safe_gc()
-    sys_log("Starting CIU Health Check...", "INFO")
-
-    # 2. Retrieve Config (Fail Fast)
-    target_url = getattr(globals, 'CIU_CALLBACK_URL', None)
-    addresses = getattr(globals, 'SLAVE_ADDRESSES', [])
-    
-    if not target_url or not addresses:
-        sys_log("CIU Error: Missing URL or Addresses", "ERROR")
-        return
-
-    # 3. Collect Data (Minimize intermediate objects)
-    slave_results = []
-    
-    for addr in addresses:
-        # Optimization: retries=1 avoids blocking loop on dead meters
-        v_stat = get_valid_valve_status(uart, addr, retries=1)
-        is_online = (v_stat is not None and v_stat != "Unknown")
-        
-        slave_results.append({
-            "slave_address": addr,
-            "connection_status": "online" if is_online else "check connection",
-            "valve_status": v_stat if is_online else "unknown"
-        })
-        # Optional: Feed watchdog if list is huge
-        # global last_alive_tick; last_alive_tick = time.time()
-
-    # 4. Build Payload
-    # Get ID inside function to handle dynamic changes if any
-    dev_id = getattr(globals, 'MQTT_CLIENT_ID', 'UNKNOWN')
-    
-    payload = {
-        "main_device_id": dev_id,
-        "report_type": "ciu_health_check",
-        "slaves": slave_results
-    }
-
-    # 5. Send HTTP POST (urequests)
-    response = None
-    try:
-        sys_log("Posting to {}...".format(target_url), "DEBUG")
-        
-        # 'json' param handles serialization efficiently
-        response = urequests.post(target_url, json=payload)
-        
-        if 200 <= response.status_code < 300:
-            sys_log("CIU Sent. Status: {}".format(response.status_code), "INFO")
-        else:
-            sys_log("CIU Failed. Status: {}".format(response.status_code), "ERROR")
-            
-    except Exception as e:
-        sys_log("CIU Post Error: {}".format(e), "ERROR")
-        
-    finally:
-        # 6. CRITICAL CLEANUP SECTION
-        if response:
-            try:
-                response.close() # Always close socket
-            except:
-                pass
-        
-        # Explicitly break references to large objects
-        slave_results = None
-        payload = None
-        response = None
-        
-        # Force collection immediately to prevent heap growth
-        safe_gc()
-
-
 # ============ MONITORING CORE ============ #
 
 def monitor_loop():
@@ -254,7 +176,11 @@ def monitor_loop():
                 # Process only 1 command per loop to prevent blocking
                 # (or process all if critical, but 1 per loop is safer for RAM)
                 while globals.CMD_QUEUE:
+                    # --- THREAD LOCK: Safely read/remove from the shared resource ---
+                    _thread.lock()
                     cmd_item = globals.CMD_QUEUE.pop(0)
+                    _thread.unlock()
+                    # ----------------------------------------------------------------
                     
                     # Extract safely
                     cmd = cmd_item.get('cmd')
@@ -307,10 +233,6 @@ def monitor_loop():
                         meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
                             "type": "device_report", "device": dev_id, "status": "valve_closed"
                         }))
-                        
-                    # --- NEW: HANDLE CUI CHECK ---
-                    elif cmd == "ciu_health_check":
-                        perform_ciu_health_check(uart)
                     
                     cmd_item = None
                     last_alive_tick = time() # Feed watchdog after cmd processing
@@ -385,10 +307,10 @@ def main():
                  machine.reset()
         
         sys_log("GSM Connected.", "INFO")
-        led.value(0)
+        led.value(1)
         
-        # 2. Run OTA Check
-        check_for_update_on_start()
+#         # 2. Run OTA Check
+#         check_for_update_on_start()
         
         # 3. Initialize Memory/State
         check_for_initConnection()
