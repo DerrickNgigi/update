@@ -164,6 +164,49 @@ def close_valve(uart, device_address):
 
 # ========== MONITORING FUNCTIONS ==========
 
+POSTPAID_PERIOD_SECONDS = 30 * 24 * 3600
+MIN_VALID_EPOCH = 1735689600  # 2025-01-01; anything earlier means the clock is not synced
+
+def process_postpaid(uart, address, current_volume, publish_func, mqtt_topic):
+    """
+    Postpaid: valve stays open. Water is counted over a 30-day period; when the
+    period ends, the consumption is published as a charge and a new period starts.
+    """
+    open_valve(uart, address)
+
+    now = time.time()
+    if now < MIN_VALID_EPOCH:
+        return  # clock not synced yet; cannot measure a period reliably
+
+    period = load_postpaid_period(address)
+    if period is None:
+        save_postpaid_period(address, now, current_volume)
+        return
+
+    start_ts, start_volume = period
+    if (now - start_ts) < POSTPAID_PERIOD_SECONDS:
+        return
+
+    consumed = current_volume - start_volume
+    if consumed < 0:
+        consumed = 0
+    try:
+        publish_func(mqtt_topic, json.dumps({
+            "type": "device_report",
+            "device": address,
+            "status": "postpaid_charge",
+            "period_start": start_ts,
+            "period_end": now,
+            "start_flow_L": start_volume,
+            "end_flow_L": current_volume,
+            "consumed_L": consumed
+        }))
+    except Exception as e:
+        print("Postpaid publish error:", e)
+        return  # keep the period open so the charge is retried next check
+
+    save_postpaid_period(address, now, current_volume)
+
 def monitor_target(uart, addresses, publish_func, mqtt_client, mqtt_topic):
     """
     Standard monitoring with integrated ALERTING.
@@ -187,7 +230,12 @@ def monitor_target(uart, addresses, publish_func, mqtt_client, mqtt_topic):
                 pass
             continue 
 
-        # --- NORMAL LOGIC ---
+        # --- POSTPAID LOGIC ---
+        if load_billing_mode(address) == "postpaid":
+            process_postpaid(uart, address, current_volume, publish_func, mqtt_topic)
+            continue
+
+        # --- NORMAL (PREPAID) LOGIC ---
         target_volume_liters = load_target_reading(address)
         
         if target_volume_liters is None:
@@ -242,35 +290,44 @@ def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqt
                 pass
             continue 
         
-        # 2. Check and Enforce Target
-        target_volume = load_target_reading(address)
-        if target_volume is None:
-            save_target_reading(address, cumulative)
-            target_volume = cumulative
-        
-        # FIX 3: Use consistent variable names ('cumulative' vs 'target_volume')
-        if cumulative >= target_volume:
-            close_valve(uart, address)
-            # Note: We are ALREADY inside the upload function. 
-            # Recursively calling read_meter_parameters_upload here is dangerous (infinite loop risk).
-            # Instead, just let the flow continue to step 4 to upload the status "Closed".
+        # 2. Check and Enforce Target (prepaid) or run billing period (postpaid)
+        mode = load_billing_mode(address)
+        target_volume = None
+        if mode == "postpaid":
+            process_postpaid(uart, address, cumulative, publish_func, mqtt_topic)
+            period = load_postpaid_period(address)
+            period_start_flow = period[1] if period else None
         else:
-            open_valve(uart, address)
+            target_volume = load_target_reading(address)
+            if target_volume is None:
+                save_target_reading(address, cumulative)
+                target_volume = cumulative
+
+            if cumulative >= target_volume:
+                close_valve(uart, address)
+            else:
+                open_valve(uart, address)
 
         # 3. Read Health Variations
         valve_state = get_valid_valve_status(uart, address)
         health = get_valid_health_data(uart, address)
         
         # 4. Upload Comprehensive Payload
-        payload = json.dumps({
+        report = {
             "type": "device_report",
             "device": address,
+            "mode": mode,
             "cumulative_flow_L": cumulative,
             "target_flow_L": target_volume,
             "valve_status": valve_state,
             "pipe_status": health["pipe_empty"],
             "battery_status": health["battery"]
-        })
+        }
+        if mode == "postpaid":
+            report["period_start_flow_L"] = period_start_flow
+            if period_start_flow is not None:
+                report["period_consumed_L"] = max(0, cumulative - period_start_flow)
+        payload = json.dumps(report)
 
         try:
             publish_func(mqtt_topic, payload)

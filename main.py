@@ -5,7 +5,8 @@ from meter import (
     valve_test, get_valid_volume,
     open_valve, close_valve, 
     save_target_reading, load_target_reading,
-    uart, get_valid_valve_status
+    uart, get_valid_valve_status,
+    save_billing_mode, save_postpaid_period, clear_postpaid_period, MIN_VALID_EPOCH
 )
 from ota_update import *
 from machine import UART, Pin
@@ -219,6 +220,27 @@ def monitor_loop():
                             # 3. Enforce Valve (5 Arguments Required)
                             monitor_target(
                                 uart, [addr], 
+                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                            )
+
+                    elif cmd == "set_mode" and addr:
+                        new_mode = cmd_item.get('mode')
+                        if new_mode in ("prepaid", "postpaid"):
+                            save_billing_mode(addr, new_mode)
+                            if new_mode == "postpaid":
+                                # Start a fresh 30-day period from the current reading
+                                vol = get_valid_volume(uart, addr)
+                                if vol is not None and time() >= MIN_VALID_EPOCH:
+                                    save_postpaid_period(addr, time(), vol)
+                                else:
+                                    sys_log("Postpaid start deferred Addr {}".format(addr), "WARNING")
+                                    clear_postpaid_period(addr)
+                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                                "type": "device_report", "device": dev_id,
+                                "status": "mode_set", "mode": new_mode
+                            }))
+                            monitor_target(
+                                uart, [addr],
                                 meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 

@@ -72,9 +72,10 @@ def datacb(msg):
             "cmd": cmd,
             "addr": addr,
             "dev_id": dev_id,
-            "litres": litres
+            "litres": litres,
+            "mode": payload.get('mode')
         }
-        
+
         _thread.lock()
         globals.CMD_QUEUE.append(cmd_data)
         _thread.unlock()
