@@ -2,6 +2,7 @@ from machine import UART
 import time
 from meter_storage import *
 import json
+import globals
 
 # ========== UART CONFIG ==========
 # Configure UART for Modbus communication (9600 baud, 8N1)
@@ -264,10 +265,24 @@ def read_meter_parameters(uart, addresses):
         health = get_valid_health_data(uart, address)
         valve_state = get_valid_valve_status(uart, address)
 
+def _read_software_version():
+    """
+    Live read of the applied firmware version (mirrors ota_update.get_local_version's
+    fallback, kept independent so this module doesn't need to import ota_update).
+    """
+    try:
+        with open(globals.VERSION_FILE, "r") as f:
+            return f.read().strip()
+    except:
+        return "0.0.0"
+
 def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqtt_topic):
     """
     Reads meter, enforces valve logic locally, and uploads detailed report to MQTT.
     """
+    software_version = _read_software_version()
+    globals_version = globals.GLOBAL_VERSION
+
     for address in addresses:
         # 1. Read Flow Data
         cumulative = get_valid_volume(uart, address)
@@ -321,7 +336,9 @@ def read_meter_parameters_upload(uart, addresses, publish_func, mqtt_client, mqt
             "target_flow_L": target_volume,
             "valve_status": valve_state,
             "pipe_status": health["pipe_empty"],
-            "battery_status": health["battery"]
+            "battery_status": health["battery"],
+            "software_version": software_version,
+            "globals_version": globals_version
         }
         if mode == "postpaid":
             report["period_start_flow_L"] = period_start_flow
