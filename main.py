@@ -223,6 +223,29 @@ def monitor_loop():
                                 meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
+                    elif cmd == "correction" and addr:
+                        litres = cmd_item.get('litres', 0)
+                        current = get_valid_volume(uart, addr)
+                        if current is None:
+                            sys_log("Correction skipped, meter unreachable Addr {}".format(addr), "WARNING")
+                        else:
+                            curr_target = load_target_reading(addr)
+                            if curr_target is None: curr_target = current
+                            # litres present (nonzero): partial correction. Absent/0: full reset.
+                            new_target = (curr_target + litres) if litres else current
+                            new_target = max(new_target, current)  # never leave negative usable credit
+                            save_target_reading(addr, new_target)
+
+                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                                "type": "device_report", "device": dev_id,
+                                "status": "correction_applied", "new_target": new_target
+                            }))
+
+                            monitor_target(
+                                uart, [addr],
+                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                            )
+
                     elif cmd == "set_mode" and addr:
                         new_mode = cmd_item.get('mode')
                         if new_mode in ("prepaid", "postpaid"):
@@ -330,10 +353,10 @@ def main():
         
         sys_log("GSM Connected.", "INFO")
         led.value(1)
-        
+
 #         # 2. Run OTA Check
 #         check_for_update_on_start()
-        
+
         # 3. Initialize Memory/State
         check_for_initConnection()
 
