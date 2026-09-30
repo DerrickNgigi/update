@@ -155,13 +155,23 @@ def get_valid_volume(uart, address, retries=5, delay=1):
         time.sleep(delay)
     return None
 
-def open_valve(uart, device_address):
-    write_single_register(uart, device_address, 0x0060, 0x0001)
-    time.sleep(0.5)
+def open_valve(uart, device_address, retries=5, delay=1):
+    for attempt in range(retries):
+        if write_single_register(uart, device_address, 0x0060, 0x0001):
+            time.sleep(0.5)
+            return True
+        time.sleep(delay)
+    print("⚠ open_valve addr %s: no ack after %s attempts" % (device_address, retries))
+    return False
 
-def close_valve(uart, device_address):
-    write_single_register(uart, device_address, 0x0060, 0x0002)
-    time.sleep(0.5)
+def close_valve(uart, device_address, retries=5, delay=1):
+    for attempt in range(retries):
+        if write_single_register(uart, device_address, 0x0060, 0x0002):
+            time.sleep(0.5)
+            return True
+        time.sleep(delay)
+    print("⚠ close_valve addr %s: no ack after %s attempts" % (device_address, retries))
+    return False
 
 # ========== MONITORING FUNCTIONS ==========
 
