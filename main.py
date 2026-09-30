@@ -217,9 +217,9 @@ def monitor_loop():
                                 "status": "load_success", "new_target": new_target
                             }))
 
-                            # 3. Enforce Valve (5 Arguments Required)
-                            monitor_target(
-                                uart, [addr], 
+                            # 3. Enforce valve + always report state (incl. valve_status) to the dashboard
+                            read_meter_parameters_upload(
+                                uart, [addr],
                                 meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
@@ -241,7 +241,8 @@ def monitor_loop():
                                 "status": "correction_applied", "new_target": new_target
                             }))
 
-                            monitor_target(
+                            # Enforce valve + always report state (incl. valve_status) to the dashboard
+                            read_meter_parameters_upload(
                                 uart, [addr],
                                 meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
@@ -262,21 +263,28 @@ def monitor_loop():
                                 "type": "device_report", "device": dev_id,
                                 "status": "mode_set", "mode": new_mode
                             }))
-                            monitor_target(
+                            # Enforce valve + always report state (incl. valve_status) to the dashboard
+                            read_meter_parameters_upload(
                                 uart, [addr],
                                 meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
                     elif cmd == "valve_open" and addr:
-                        open_valve(uart, addr)
+                        ok = open_valve(uart, addr)
+                        valve_state = get_valid_valve_status(uart, addr)
                         meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
-                            "type": "device_report", "device": dev_id, "status": "valve_open"
+                            "type": "device_report", "device": dev_id,
+                            "status": "valve_open" if ok else "valve_open_failed",
+                            "valve_status": valve_state
                         }))
-                    
+
                     elif cmd == "valve_close" and addr:
-                        close_valve(uart, addr)
+                        ok = close_valve(uart, addr)
+                        valve_state = get_valid_valve_status(uart, addr)
                         meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
-                            "type": "device_report", "device": dev_id, "status": "valve_closed"
+                            "type": "device_report", "device": dev_id,
+                            "status": "valve_closed" if ok else "valve_close_failed",
+                            "valve_status": valve_state
                         }))
                     
                     cmd_item = None
