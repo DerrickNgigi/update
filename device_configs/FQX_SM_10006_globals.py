@@ -1,7 +1,7 @@
 from machine import UART
 
 # ============ DEVICE CONFIGURATION ============ #
-GLOBAL_VERSION = "1.0.7"
+GLOBAL_VERSION = "1.0.8"
 
 # ====== Configuration ======
 UPDATE_URL = "https://raw.githubusercontent.com/DerrickNgigi/update/main"
@@ -32,6 +32,16 @@ MQTT_SUB_TOPICS = [
 ]
 
 timer = 180
+
+# Added 2026-10-03: this config predated these three keys, which main.py
+# reads directly - the missing attributes crashed monitor_loop() on its
+# first line every boot. (The getattr() fallback added to main.py the same
+# day means this file alone isn't what's protecting the device anymore, but
+# an explicit, correct value here beats quietly relying on a firmware
+# default forever.)
+CHECK_INTERVAL = 180    # 3 Minutes
+UPLOAD_INTERVAL = 3600  # 1 Hour
+RESPONSIVE_SLEEP = 5    # Sleep cycle duration
 
 # ============ COMMAND QUEUE (THREAD SAFE) ============ #
 # MQTT thread puts commands here. Main thread executes them.

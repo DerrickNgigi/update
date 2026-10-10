@@ -146,9 +146,16 @@ def monitor_loop():
     sys_log("Monitor Loop Started", "INFO")
     
     # --- CONSTANTS (Use consts to save lookup time) ---
-    CHECK_INTERVAL = globals.CHECK_INTERVAL   # 3 Minutes
-    UPLOAD_INTERVAL = globals.UPLOAD_INTERVAL  # 1 Hour
-    RESPONSIVE_SLEEP = globals.RESPONSIVE_SLEEP  # Sleep cycle duration
+    # getattr with defaults, not direct access: FQX_SM_10006 and FQX_SM_10008's
+    # real on-device configs predate these three keys (they still have the old
+    # "timer = 180" instead) - a direct globals.CHECK_INTERVAL read crashed
+    # monitor_loop() on its first line, every single boot, on both of those
+    # devices (caught by main()'s outer except -> reset -> repeat, forever,
+    # with no backoff). Confirmed 2026-10-03 against the real device_configs/
+    # fleet. Defaults below match every other working device's config.
+    CHECK_INTERVAL = getattr(globals, 'CHECK_INTERVAL', 180)    # 3 Minutes
+    UPLOAD_INTERVAL = getattr(globals, 'UPLOAD_INTERVAL', 3600)  # 1 Hour
+    RESPONSIVE_SLEEP = getattr(globals, 'RESPONSIVE_SLEEP', 5)   # Sleep cycle duration
     
     # Initialize Timers
     # Set upload time to NOW to force an initial upload (or set to time() + 3600 to wait)
@@ -199,7 +206,7 @@ def monitor_loop():
                         sys_log("Manual Status...", "INFO")
                         read_meter_parameters_upload(
                             uart, SLAVE_ADDRESSES, 
-                            meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                            meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                         )
 
                     elif cmd == "success" and addr:
@@ -212,7 +219,7 @@ def monitor_loop():
                             save_target_reading(addr, new_target)
                             
                             # 2. Publish Confirmation
-                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                            meter_mqtts.publish(MQTT_PUB_TOPIC, json.dumps({
                                 "type": "device_report", "device": dev_id, 
                                 "status": "load_success", "new_target": new_target
                             }))
@@ -220,7 +227,7 @@ def monitor_loop():
                             # 3. Enforce valve + always report state (incl. valve_status) to the dashboard
                             read_meter_parameters_upload(
                                 uart, [addr],
-                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                                meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
                     elif cmd == "correction" and addr:
@@ -236,7 +243,7 @@ def monitor_loop():
                             new_target = max(new_target, current)  # never leave negative usable credit
                             save_target_reading(addr, new_target)
 
-                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                            meter_mqtts.publish(MQTT_PUB_TOPIC, json.dumps({
                                 "type": "device_report", "device": dev_id,
                                 "status": "correction_applied", "new_target": new_target
                             }))
@@ -244,7 +251,7 @@ def monitor_loop():
                             # Enforce valve + always report state (incl. valve_status) to the dashboard
                             read_meter_parameters_upload(
                                 uart, [addr],
-                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                                meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
                     elif cmd == "set_mode" and addr:
@@ -259,20 +266,20 @@ def monitor_loop():
                                 else:
                                     sys_log("Postpaid start deferred Addr {}".format(addr), "WARNING")
                                     clear_postpaid_period(addr)
-                            meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                            meter_mqtts.publish(MQTT_PUB_TOPIC, json.dumps({
                                 "type": "device_report", "device": dev_id,
                                 "status": "mode_set", "mode": new_mode
                             }))
                             # Enforce valve + always report state (incl. valve_status) to the dashboard
                             read_meter_parameters_upload(
                                 uart, [addr],
-                                meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                                meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                             )
 
                     elif cmd == "valve_open" and addr:
                         ok = open_valve(uart, addr)
                         valve_state = get_valid_valve_status(uart, addr)
-                        meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                        meter_mqtts.publish(MQTT_PUB_TOPIC, json.dumps({
                             "type": "device_report", "device": dev_id,
                             "status": "valve_open" if ok else "valve_open_failed",
                             "valve_status": valve_state
@@ -281,7 +288,7 @@ def monitor_loop():
                     elif cmd == "valve_close" and addr:
                         ok = close_valve(uart, addr)
                         valve_state = get_valid_valve_status(uart, addr)
-                        meter_mqtts.mqtt.publish(MQTT_PUB_TOPIC, json.dumps({
+                        meter_mqtts.publish(MQTT_PUB_TOPIC, json.dumps({
                             "type": "device_report", "device": dev_id,
                             "status": "valve_closed" if ok else "valve_close_failed",
                             "valve_status": valve_state
@@ -297,7 +304,7 @@ def monitor_loop():
                 # sys_log("3-Min Check", "DEBUG")
                 monitor_target(
                     uart, SLAVE_ADDRESSES, 
-                    meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                    meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                 )
                 last_check_time = current_time
                 # Clean RAM after check
@@ -310,7 +317,7 @@ def monitor_loop():
                 sys_log("1-Hour Upload...", "INFO")
                 read_meter_parameters_upload(
                     uart, SLAVE_ADDRESSES, 
-                    meter_mqtts.mqtt.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
+                    meter_mqtts.publish, meter_mqtts.mqtt, MQTT_PUB_TOPIC
                 )
                 last_upload_time = current_time
                 

@@ -94,6 +94,30 @@ mqtt = network.mqtt(
     published_cb=pubcb, data_cb=datacb
 )
 
+# QoS 1 (at-least-once), matching the backend's publish/subscribe QoS - kept
+# the same on both ends deliberately, since MQTT only guarantees min(sender
+# QoS, receiver QoS) anyway, so a mismatch here would silently cap delivery
+# at the lower side. Not QoS 2: the broker/client four-way handshake adds
+# latency this old REPL's serial link doesn't need, and the backend already
+# tolerates the occasional duplicate QoS 1 can produce. Not verified against
+# the binding's own help() text (that query hung repeatedly against this old
+# REPL over a live serial session) - so every call site tries qos=1 first
+# and transparently falls back to the no-qos default if the native binding
+# doesn't accept the keyword, rather than assuming and risking a crash.
+MQTT_QOS = getattr(globals, 'MQTT_QOS', 1)
+
+def _subscribe(mqtt, topic):
+    try:
+        mqtt.subscribe(topic, qos=MQTT_QOS)
+    except TypeError:
+        mqtt.subscribe(topic)
+
+def _publish(mqtt, topic, message):
+    try:
+        mqtt.publish(topic, message, qos=MQTT_QOS)
+    except TypeError:
+        mqtt.publish(topic, message)
+
 def mqttInitialize(mqtt, topic_list):
     loopCount = 10
     mqtt.start()
@@ -103,18 +127,30 @@ def mqttInitialize(mqtt, topic_list):
         print("MQTT Connecting...")
         utime.sleep(1)
         loopCount -= 1
-        
+
     if mqtt.status()[0] != 2:
         print("MQTT Failed")
         return None
-    
+
     print("MQTT Connected")
     for topic in topic_list:
-        mqtt.subscribe(topic)
+        _subscribe(mqtt, topic)
     return mqtt
 
 def mqttPublish(mqtt, topic, message):
     try:
-        mqtt.publish(topic, message)
-    except:
-        pass
+        _publish(mqtt, topic, message)
+    except Exception as e:
+        print("Publish Error:", e)
+
+def publish(topic, message):
+    """
+    Bound to this module's single `mqtt` client - matches the (topic,
+    message) signature every direct-publish call site in main.py used, and
+    the publish_func(topic, message) signature meter.py's
+    read_meter_parameters_upload()/monitor_target() call. Always goes
+    through the QoS-aware _publish() above, unlike calling
+    meter_mqtts.mqtt.publish() directly (what main.py did everywhere
+    before this), which has no QoS applied at all.
+    """
+    _publish(mqtt, topic, message)

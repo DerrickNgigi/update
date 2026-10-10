@@ -4,9 +4,93 @@ from meter_storage import *
 import json
 import globals
 
+# ========== CRC Utils (moved above FakeMeterUART, which needs it) ==========
+def calculate_crc(data):
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x0001:
+                crc >>= 1
+                crc ^= 0xA001
+            else:
+                crc >>= 1
+    return crc
+
+class FakeMeterUART:
+    """
+    Stands in for a real RS485 Modbus meter when globals.FAKE_METER is set -
+    for bench testing the read/enforce/publish pipeline end-to-end (CRC
+    build+verify, billing logic, JSON report, MQTT publish) with no
+    physical meter wired up. Matches the exact request shapes
+    build_modbus_request()/write_single_register() below actually send (by
+    function code + register address), with correct, CRC-valid responses,
+    so none of the real parsing code needs to know it's talking to a fake.
+
+    Cumulative flow increments a little on every read so a scheduled check
+    (globals.CHECK_INTERVAL) visibly shows a moving reading, like a real
+    meter would.
+    """
+    def __init__(self, start_volume=1000):
+        self._pending = b""
+        self._volume = start_volume
+        self._valve_open = True
+
+    def any(self):
+        return len(self._pending)
+
+    def read(self, n=None):
+        if n is None:
+            data, self._pending = self._pending, b""
+            return data
+        data, self._pending = self._pending[:n], self._pending[n:]
+        return data
+
+    def _read_response(self, addr, registers):
+        body = bytearray([addr, 0x03, len(registers) * 2])
+        for reg in registers:
+            body += bytearray([(reg >> 8) & 0xFF, reg & 0xFF])
+        crc = calculate_crc(body)
+        return bytes(body) + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+
+    def _write_ack(self, frame):
+        header = bytes(frame[:6])  # addr, func, reg_hi, reg_lo, qty_hi, qty_lo
+        crc = calculate_crc(header)
+        return header + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+
+    def write(self, frame):
+        addr = frame[0]
+        func = frame[1]
+        reg = (frame[2] << 8) | frame[3]
+
+        if func == 0x03 and reg == 0x000E:
+            # cumulative flow (register 0x000E, 2 registers - only the
+            # first is actually read by read_cumulative_flow() below)
+            self._volume += 1
+            self._pending = self._read_response(addr, [self._volume, 0])
+        elif func == 0x03 and reg == 0x0060:
+            # valve status: bits D1:D0 of the low byte, 0x01=Open 0x02=Closed
+            self._pending = self._read_response(addr, [0x0001 if self._valve_open else 0x0002])
+        elif func == 0x03 and reg == 0x0001:
+            # general status: all-healthy (no low battery / empty pipe / sensor error)
+            self._pending = self._read_response(addr, [0x0000])
+        elif func == 0x10 and reg == 0x0060:
+            # write to equipment control register: 0x0001=open 0x0002=close
+            value = (frame[7] << 8) | frame[8]
+            self._valve_open = (value == 0x0001)
+            self._pending = self._write_ack(frame)
+        else:
+            self._pending = b""
+
 # ========== UART CONFIG ==========
-# Configure UART for Modbus communication (9600 baud, 8N1)
-uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)
+# Configure UART for Modbus communication (9600 baud, 8N1). Bench-test
+# override: globals.FAKE_METER=True swaps in FakeMeterUART above so the
+# full read/publish pipeline can be exercised with no RS485 hardware
+# attached - see meter-gsm field investigation, 2026-10-03.
+if getattr(globals, 'FAKE_METER', False):
+    uart = FakeMeterUART()
+else:
+    uart = UART(2, baudrate=9600, bits=8, parity=1, stop=1, tx=19, rx=18)
 
 # ========== HELPER: CLEAR BUFFER ==========
 def clear_uart_buffer(uart):
@@ -35,19 +119,6 @@ def smart_read_modbus(uart, expected_bytes, timeout_attempts=15):
         return uart.read(expected_bytes)
     except:
         return None
-
-# ========== CRC Utils ==========
-def calculate_crc(data):
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            if crc & 0x0001:
-                crc >>= 1
-                crc ^= 0xA001
-            else:
-                crc >>= 1
-    return crc
 
 def verify_crc(frame):
     if not frame or len(frame) < 3:
